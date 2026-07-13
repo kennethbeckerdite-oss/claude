@@ -1,0 +1,41 @@
+name: ProResCompressor
+options:
+  bundleIdPrefix: com.kennethbeckerdite
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  TranscodeKit:
+    path: TranscodeKit
+
+targets:
+  ProResCompressor:
+    type: application
+    platform: macOS
+    sources:
+      - ProResCompressor
+    dependencies:
+      - package: TranscodeKit
+        product: TranscodeKit
+      - package: TranscodeKit
+        product: DCPKit
+    info:
+      path: ProResCompressor/Info.plist
+      properties:
+        CFBundleDisplayName: ProRes Compressor
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.video
+        NSHighResolutionCapable: true
+    settings:
+      base:
+        SWIFT_VERSION: "5.10"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        # Personal-use build: ad-hoc signing, no sandbox, no hardened runtime.
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: false
+        ENABLE_APP_SANDBOX: false
+        GENERATE_INFOPLIST_FILE: false
+        SWIFT_STRICT_CONCURRENCY: minimal

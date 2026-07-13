@@ -4,27 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ProRes Compressor** (working title) is a planned desktop video transcoding tool in the spirit of HandBrake, focused on one core job: taking large Apple ProRes files (often 50-200+ GB) and compressing them into high-quality MP4 files in a target size range of **2-4 GB**.
+**ProRes Compressor** — a native macOS app (SwiftUI, macOS 14+, Apple Silicon primary) that exports large Apple ProRes masters (50–200+ GB `.mov`) as either:
 
-There is no source code yet. This document captures the product intent and the technical direction so future sessions can start building without re-deriving context.
+1. **MP4** — H.265/H.264 at a user-chosen target size (2–4 GB range), via AVFoundation/VideoToolbox hardware encoding.
+2. **DCP** — unencrypted SMPTE 2K 24 fps Digital Cinema Package, via vendored OpenJPEG (JPEG 2000) and asdcplib (MXF).
 
-## Core Use Case
+Personal-use build only: App Sandbox off, ad-hoc signing, no distribution packaging.
 
-- Input: ProRes 422 / 422 HQ / 4444 files (typically `.mov`), e.g. camera masters or NLE exports.
-- Output: H.264 or H.265 MP4 targeted at a user-selected file size (default 2-4 GB), suitable for delivery, review, and archiving alongside the master.
-- The user picks a target size (or a preset); the tool computes the video bitrate from duration and audio settings, then runs a two-pass (or constrained-quality) encode to hit it.
+## Build & Test
 
-## Planned Technical Direction
+The Xcode project is **generated** — never edit `ProResCompressor.xcodeproj` (it is gitignored); edit `project.yml` and regenerate:
 
-- **Encoding engine:** FFmpeg (invoked as a subprocess or via libav bindings) — it handles ProRes decode and x264/x265 encode out of the box.
-- **Size targeting:** bitrate = (target size − audio size − container overhead) / duration, with two-pass encoding for accuracy; optionally CRF mode with a size cap.
-- **Hardware acceleration:** optional VideoToolbox (macOS), NVENC (NVIDIA), and QSV (Intel) paths for speed, with software x264/x265 as the quality reference.
-- **Queue:** batch multiple files with per-file or global presets, HandBrake-style.
-- **UI:** to be decided — likely a desktop GUI (e.g. Electron/Tauri or native) with a CLI mode for scripting.
+```sh
+xcodegen generate          # requires: brew install xcodegen
+open ProResCompressor.xcodeproj
+```
 
-## Development
+Engine unit tests (pure-logic: bitrate math, framing, color vectors, DCP XML golden files):
 
-No build, lint, or test commands exist yet. When scaffolding begins:
+```sh
+cd TranscodeKit && swift test
+```
 
-- Add build/test/lint commands to this file as they are introduced.
-- Keep FFmpeg interaction isolated behind a single module/service so the engine can be tested independently of any UI.
+Note: building requires macOS + Xcode. Remote/Linux Claude sessions can edit sources but cannot compile; flag anything unverified in the commit/PR description.
+
+## Architecture
+
+Strict engine/UI split. The app target (`ProResCompressor/`) is a thin SwiftUI layer over the `TranscodeKit` local Swift package. All export logic goes in the package, never in views.
+
+- `TranscodeKit` target — `SourceProbe` (async AVAsset probing), `Exporter` protocol + shared types, `BitrateCalculator` (pure math), `MP4Exporter` (AVAssetReader → AVAssetWriter).
+- `DCPKit` target — the DCP pipeline: `DCPExporter` orchestrates decode → framing (`Framing`) → Rec.709→XYZ transform (`ColorTransform`) → JPEG 2000 (`J2KEncoder` over `COpenJPEG`) → MXF wrap (`MXFWriter` over `CASDCP`) → XML packaging (`DCPPackage`) → self-check (`DCPValidator`). Audio: `AudioConformer` (24-bit/48 kHz, 5.1-padded stereo).
+- `COpenJPEG` — vendored OpenJPEG C sources (BSD-2). Do not hand-edit vendored files; record any required patches in `TranscodeKit/VENDORED.md`.
+- `CASDCP` — vendored asdcplib C++ sources (BSD) plus `asdcp_shim.cpp/h`, a small extern-C API that is the only surface Swift touches. OpenSSL calls are mapped to CommonCrypto via a compat header (see `VENDORED.md`).
+
+## Domain conventions
+
+- MP4 size targeting: bitrate computed by `BitrateCalculator` with a 0.97 safety factor so output lands under the requested cap; 10-bit sources get HEVC Main10 and source color properties are passed through.
+- DCP invariants: 12-bit X'Y'Z' (gamma 2.6, 48 cd/m² reference), DCI Cinema2K profile (≤250 Mbps), 6-channel 5.1-padded 24-bit/48 kHz audio, SMPTE ST 429 XML. Only 24.0/23.976 fps sources are accepted (23.976 conformed to 24 with 0.1% audio resample).
+- Every DCP export must end with the `DCPValidator` self-check; never report success without it.
