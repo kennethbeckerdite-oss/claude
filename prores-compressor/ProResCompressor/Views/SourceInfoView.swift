@@ -22,7 +22,7 @@ struct SourceInfoView: View {
     private var detailLine: String {
         var parts = [
             source.videoCodecName,
-            "\(source.width)×\(source.height)",
+            dimensionsText,
             String(format: "%.3g fps", source.frameRate),
             Self.durationText(source.duration),
             Self.sizeText(source.fileSizeBytes),
@@ -33,6 +33,14 @@ struct SourceInfoView: View {
             parts.append("no audio")
         }
         return parts.joined(separator: " · ")
+    }
+
+    private var dimensionsText: String {
+        var text = "\(source.displayWidth)×\(source.displayHeight)"
+        if source.naturalWidth != source.width || source.naturalHeight != source.height {
+            text += " (anamorphic \(source.width)×\(source.height))"
+        }
+        return text
     }
 
     static func durationText(_ seconds: Double) -> String {

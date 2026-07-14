@@ -9,15 +9,41 @@ public struct MP4Settings: Sendable, Equatable {
         case h264 = "H.264"
     }
 
-    public var targetBytes: Int64
+    public enum RateControl: Sendable, Equatable {
+        /// Bitrate computed to land the whole file at (or just under) `bytes`.
+        case targetSize(bytes: Int64)
+        /// Fixed average video bitrate, independent of duration.
+        case averageBitrate(bitsPerSecond: Int)
+    }
+
+    public var rateControl: RateControl
     public var codec: Codec
     public var audioBitsPerSecond: Int
+    /// Downscale-to-fit bounds (aspect preserved, never upscales). nil = keep
+    /// the source's natural size.
+    public var maxWidth: Int?
+    public var maxHeight: Int?
 
-    public init(targetBytes: Int64, codec: Codec = .hevc, audioBitsPerSecond: Int = 256_000) {
-        self.targetBytes = targetBytes
+    public init(rateControl: RateControl, codec: Codec = .hevc,
+                audioBitsPerSecond: Int = 256_000,
+                maxWidth: Int? = nil, maxHeight: Int? = nil) {
+        self.rateControl = rateControl
         self.codec = codec
         self.audioBitsPerSecond = audioBitsPerSecond
+        self.maxWidth = maxWidth
+        self.maxHeight = maxHeight
     }
+
+    /// Port of Kenneth's HandBrake "MP4 Small & HQ" preset: H.264 High,
+    /// 6 Mb/s average, capped at 1920×1080 without upscaling, AAC stereo
+    /// 160 kb/s. (x264 placebo/tune/2-pass have no VideoToolbox equivalent;
+    /// the delivery envelope is what carries over.)
+    public static let smallHQ = MP4Settings(
+        rateControl: .averageBitrate(bitsPerSecond: 6_000_000),
+        codec: .h264,
+        audioBitsPerSecond: 160_000,
+        maxWidth: 1920,
+        maxHeight: 1080)
 }
 
 public final class MP4Exporter: Exporter {
@@ -92,10 +118,21 @@ private final class MP4ExportSession: @unchecked Sendable {
         ])
         videoOutput.alwaysCopiesSampleData = false
 
-        let videoBitrate = BitrateCalculator.videoBitsPerSecond(
-            targetBytes: settings.targetBytes,
-            durationSeconds: source.duration,
-            audioBitsPerSecond: source.hasAudio ? settings.audioBitsPerSecond : 0)
+        let videoBitrate: Int
+        switch settings.rateControl {
+        case .targetSize(let bytes):
+            videoBitrate = BitrateCalculator.videoBitsPerSecond(
+                targetBytes: bytes,
+                durationSeconds: source.duration,
+                audioBitsPerSecond: source.hasAudio ? settings.audioBitsPerSecond : 0)
+        case .averageBitrate(let bitsPerSecond):
+            videoBitrate = max(BitrateCalculator.minimumVideoBitsPerSecond, bitsPerSecond)
+        }
+
+        // Natural (PAR-corrected) size, not coded size — anamorphic sources
+        // export squeezed otherwise. Optionally fitted into the preset bounds.
+        let outputSize = RenderSize.fit(width: source.naturalWidth, height: source.naturalHeight,
+                                        maxWidth: settings.maxWidth, maxHeight: settings.maxHeight)
 
         let frameRate = source.frameRate > 0 ? source.frameRate : 24
         var compression: [String: Any] = [
@@ -117,8 +154,12 @@ private final class MP4ExportSession: @unchecked Sendable {
 
         var videoSettings: [String: Any] = [
             AVVideoCodecKey: codecType,
-            AVVideoWidthKey: source.width,
-            AVVideoHeightKey: source.height,
+            AVVideoWidthKey: outputSize.width,
+            AVVideoHeightKey: outputSize.height,
+            // Stretch decoded (coded-size) buffers to the PAR-corrected output
+            // frame; aspect is already correct because outputSize derives from
+            // naturalSize.
+            AVVideoScalingModeKey: AVVideoScalingModeResize,
             AVVideoCompressionPropertiesKey: compression,
         ]
         if let primaries = source.colorPrimaries,
@@ -132,6 +173,9 @@ private final class MP4ExportSession: @unchecked Sendable {
         }
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = false
+        // Carry rotation/flip metadata (e.g. phone footage) instead of baking
+        // it into pixels.
+        videoInput.transform = source.preferredTransform
 
         // --- Audio (AAC stereo) ---
         if source.hasAudio, let audioTrack = asset.tracks(withMediaType: .audio).first {

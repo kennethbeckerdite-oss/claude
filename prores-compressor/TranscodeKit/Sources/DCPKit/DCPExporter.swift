@@ -38,6 +38,10 @@ public final class DCPExporter: Exporter {
             throw ExportError.unsupportedSource(
                 "DCP requires a 24 or 23.976 fps source; this file is \(source.frameRate) fps")
         }
+        guard !source.isQuarterRotated else {
+            throw ExportError.unsupportedSource(
+                "this file carries 90°/270° rotation metadata, which DCP export doesn't support — bake the rotation into a new master first")
+        }
 
         let folderURL = Self.makeFolderURL(for: source, settings: settings)
         do {
@@ -109,7 +113,10 @@ public final class DCPExporter: Exporter {
     private func encodePicture(source: ProbedSource, to pictureURL: URL, assetUUID: UUID,
                                onProgress: @escaping @Sendable (ExportProgress) -> Void) async throws -> Int {
         let container = settings.container
-        let geometry = FramingGeometry.fit(sourceWidth: source.width, sourceHeight: source.height,
+        // Natural (PAR-corrected) size decides the framing; vImage stretches
+        // the coded-size decoded buffers into it, flattening any anamorphic PAR.
+        let geometry = FramingGeometry.fit(sourceWidth: source.naturalWidth,
+                                           sourceHeight: source.naturalHeight,
                                            in: container)
         let encoder = J2KEncoder(width: container.width, height: container.height,
                                  bitsPerSecond: settings.j2kBitsPerSecond)

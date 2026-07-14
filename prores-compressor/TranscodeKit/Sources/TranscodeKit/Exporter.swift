@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Everything the exporters need to know about an input file, captured once
@@ -10,8 +11,17 @@ public struct ProbedSource: Sendable, Equatable {
 
     public let videoCodecName: String
     public let isProRes: Bool
+    /// Coded (stored) pixel dimensions — what the decoder emits.
     public let width: Int
     public let height: Int
+    /// Display dimensions after pixel-aspect-ratio correction (the track's
+    /// naturalSize), before rotation. Anamorphic sources have coded ≠ natural;
+    /// exports must use these or the picture comes out squeezed.
+    public let naturalWidth: Int
+    public let naturalHeight: Int
+    /// Rotation/flip metadata (e.g. phone footage); MP4 export passes it
+    /// through, DCP export rejects rotated sources.
+    public let preferredTransform: CGAffineTransform
     public let frameRate: Double
     public let bitDepth: Int
 
@@ -25,9 +35,27 @@ public struct ProbedSource: Sendable, Equatable {
     public let audioChannels: Int
     public let audioSampleRate: Double
 
+    /// `naturalWidth`/`naturalHeight` after applying any 90°/270° rotation —
+    /// what the viewer actually sees; use for UI and aspect decisions.
+    public var displayWidth: Int {
+        isQuarterRotated ? naturalHeight : naturalWidth
+    }
+
+    public var displayHeight: Int {
+        isQuarterRotated ? naturalWidth : naturalHeight
+    }
+
+    public var isQuarterRotated: Bool {
+        // 90°/270° transforms have zero on the diagonal.
+        abs(preferredTransform.a) < 0.001 && abs(preferredTransform.d) < 0.001
+    }
+
     public init(url: URL, fileSizeBytes: Int64, duration: Double,
                 videoCodecName: String, isProRes: Bool,
-                width: Int, height: Int, frameRate: Double, bitDepth: Int,
+                width: Int, height: Int,
+                naturalWidth: Int, naturalHeight: Int,
+                preferredTransform: CGAffineTransform,
+                frameRate: Double, bitDepth: Int,
                 colorPrimaries: String?, colorTransferFunction: String?, colorYCbCrMatrix: String?,
                 hasAudio: Bool, audioChannels: Int, audioSampleRate: Double) {
         self.url = url
@@ -37,6 +65,9 @@ public struct ProbedSource: Sendable, Equatable {
         self.isProRes = isProRes
         self.width = width
         self.height = height
+        self.naturalWidth = naturalWidth
+        self.naturalHeight = naturalHeight
+        self.preferredTransform = preferredTransform
         self.frameRate = frameRate
         self.bitDepth = bitDepth
         self.colorPrimaries = colorPrimaries
@@ -110,6 +141,29 @@ public protocol Exporter: Sendable {
     /// `ExportError.cancelled` and removing partial output.
     func export(source: ProbedSource,
                 onProgress: @escaping @Sendable (ExportProgress) -> Void) async throws -> ExportResult
+}
+
+public enum RenderSize {
+    /// Fits dimensions within optional maximums, preserving aspect and never
+    /// upscaling. Results are even (encoder requirement).
+    public static func fit(width: Int, height: Int,
+                           maxWidth: Int? = nil, maxHeight: Int? = nil) -> (width: Int, height: Int) {
+        guard width > 0, height > 0 else { return (evened(max(2, width)), evened(max(2, height))) }
+        var scale = 1.0
+        if let maxWidth, maxWidth > 0 {
+            scale = min(scale, Double(maxWidth) / Double(width))
+        }
+        if let maxHeight, maxHeight > 0 {
+            scale = min(scale, Double(maxHeight) / Double(height))
+        }
+        let fittedWidth = max(2, Int((Double(width) * scale).rounded()))
+        let fittedHeight = max(2, Int((Double(height) * scale).rounded()))
+        return (evened(fittedWidth), evened(fittedHeight))
+    }
+
+    private static func evened(_ value: Int) -> Int {
+        value - value % 2
+    }
 }
 
 /// Picks a non-clobbering output URL next to the source:

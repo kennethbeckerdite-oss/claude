@@ -48,7 +48,7 @@ struct DCPSettingsView: View {
 
     private var summary: String {
         let mismatch = abs(source.frameRate - 23.976) < 0.01
-        let suggestion = DCPContainer.suggested(width: source.width, height: source.height)
+        let suggestion = DCPContainer.suggested(width: source.displayWidth, height: source.displayHeight)
         var text = "SMPTE 2K 24 fps, unencrypted · 12-bit X'Y'Z' · 5.1-padded 24-bit/48 kHz audio."
         if mismatch {
             text += " 23.976 source will be conformed to 24 fps (0.1% speed-up)."

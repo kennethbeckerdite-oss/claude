@@ -23,8 +23,14 @@ final class AppState {
     private(set) var phase: Phase = .idle
     var progress: ExportProgress?
 
+    enum MP4Mode: String, CaseIterable {
+        case targetSize = "Target size"
+        case smallHQ = "Small & HQ (1080p)"
+    }
+
     // Export configuration (persists across files within a session).
     var format: ExportFormat = .mp4
+    var mp4Mode: MP4Mode = .targetSize
     var targetGigabytes: Double = 3.0
     var mp4Codec: MP4Settings.Codec = .hevc
     var dcpContainer: DCPContainer = .flat
@@ -56,9 +62,16 @@ final class AppState {
         let exporter: any Exporter
         switch format {
         case .mp4:
-            exporter = MP4Exporter(settings: MP4Settings(
-                targetBytes: Int64(targetGigabytes * 1_000_000_000),
-                codec: mp4Codec))
+            let settings: MP4Settings
+            switch mp4Mode {
+            case .targetSize:
+                settings = MP4Settings(
+                    rateControl: .targetSize(bytes: Int64(targetGigabytes * 1_000_000_000)),
+                    codec: mp4Codec)
+            case .smallHQ:
+                settings = .smallHQ
+            }
+            exporter = MP4Exporter(settings: settings)
         case .dcp:
             exporter = DCPExporter(settings: DCPSettings(
                 contentTitle: dcpContentTitle.isEmpty

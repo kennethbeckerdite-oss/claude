@@ -10,6 +10,27 @@ struct MP4SettingsView: View {
     var body: some View {
         @Bindable var appState = appState
         VStack(alignment: .leading, spacing: 12) {
+            Picker("Mode", selection: $appState.mp4Mode) {
+                ForEach(AppState.MP4Mode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            switch appState.mp4Mode {
+            case .smallHQ:
+                Text(smallHQSummary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            case .targetSize:
+                targetSizeControls
+            }
+        }
+    }
+
+    private var targetSizeControls: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 12) {
             LabeledContent("Target size") {
                 HStack {
                     ForEach(Self.presets, id: \.self) { preset in
@@ -40,6 +61,16 @@ struct MP4SettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var smallHQSummary: String {
+        let estimatedBytes = BitrateCalculator.estimatedOutputBytes(
+            videoBitsPerSecond: 6_000_000,
+            durationSeconds: source.duration,
+            audioBitsPerSecond: source.hasAudio ? 160_000 : 0,
+            safetyFactor: 1.0)
+        let size = ByteCountFormatter.string(fromByteCount: estimatedBytes, countStyle: .file)
+        return "H.264 High · 6 Mb/s · up to 1920×1080 (no upscaling) · AAC 160 kb/s stereo — about \(size) for this file. Ported from the HandBrake \"MP4 Small & HQ\" preset."
     }
 
     private var bitrateSummary: String {

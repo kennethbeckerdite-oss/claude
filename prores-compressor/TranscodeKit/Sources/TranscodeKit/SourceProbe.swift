@@ -13,14 +13,26 @@ public enum SourceProbe {
             throw ExportError.noVideoTrack
         }
 
-        let (formatDescriptions, nominalFrameRate) =
-            try await videoTrack.load(.formatDescriptions, .nominalFrameRate)
+        let (formatDescriptions, nominalFrameRate, naturalSize, preferredTransform) =
+            try await videoTrack.load(.formatDescriptions, .nominalFrameRate,
+                                      .naturalSize, .preferredTransform)
         guard let format = formatDescriptions.first else {
             throw ExportError.unsupportedSource("video track has no format description")
         }
 
         let codecType = CMFormatDescriptionGetMediaSubType(format)
         let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+
+        // naturalSize is PAR-corrected (anamorphic sources: coded ≠ natural)
+        // but not rotation-corrected; fall back to coded dims if it's absent.
+        var naturalWidth = Int(naturalSize.width.rounded())
+        var naturalHeight = Int(naturalSize.height.rounded())
+        if naturalWidth <= 0 || naturalHeight <= 0 {
+            naturalWidth = Int(dimensions.width)
+            naturalHeight = Int(dimensions.height)
+        }
+        naturalWidth -= naturalWidth % 2
+        naturalHeight -= naturalHeight % 2
 
         var audioChannels = 0
         var audioSampleRate = 0.0
@@ -43,6 +55,9 @@ public enum SourceProbe {
             isProRes: Self.proResCodecs.keys.contains(codecType),
             width: Int(dimensions.width),
             height: Int(dimensions.height),
+            naturalWidth: naturalWidth,
+            naturalHeight: naturalHeight,
+            preferredTransform: preferredTransform,
             frameRate: Double(nominalFrameRate),
             bitDepth: Self.bitDepth(for: codecType, format: format),
             colorPrimaries: Self.extensionString(format, kCMFormatDescriptionExtension_ColorPrimaries),
