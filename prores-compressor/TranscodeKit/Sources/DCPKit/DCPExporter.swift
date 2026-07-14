@@ -97,6 +97,11 @@ public final class DCPExporter: Exporter {
             soundUUID: soundUUID,
             frameCount: frameCount))
 
+        // On non-APFS volumes (exFAT/NTFS) macOS stores extended attributes
+        // as "._" AppleDouble siblings; cinema servers flag them as foreign
+        // files, so strip them before validating.
+        Self.removeAppleDoubleFiles(in: folderURL)
+
         // --- Self-validation (never skipped) ---
         onProgress(ExportProgress(fraction: 0.99, eta: nil, phase: "Verifying"))
         try DCPValidator.validate(folderURL: folderURL,
@@ -260,6 +265,14 @@ public final class DCPExporter: Exporter {
             counter += 1
         }
         return candidate
+    }
+
+    private static func removeAppleDoubleFiles(in folderURL: URL) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: folderURL, includingPropertiesForKeys: nil) else { return }
+        for url in contents where url.lastPathComponent.hasPrefix("._") {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func folderBytes(_ folderURL: URL) -> Int64 {

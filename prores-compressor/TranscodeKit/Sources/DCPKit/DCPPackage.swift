@@ -11,6 +11,9 @@ public enum DCPPackage {
     public struct Input {
         public let folderURL: URL
         public let contentTitle: String
+        /// Full DCNC composition name (normally the folder name). ISDCF
+        /// expects this — not the human title — as the CPL ContentTitleText.
+        public let dcncName: String
         public let container: DCPContainer
         public let pictureURL: URL
         public let pictureUUID: UUID
@@ -19,12 +22,14 @@ public enum DCPPackage {
         public let frameCount: Int
         public let issueDate: Date
 
-        public init(folderURL: URL, contentTitle: String, container: DCPContainer,
+        public init(folderURL: URL, contentTitle: String, dcncName: String? = nil,
+                    container: DCPContainer,
                     pictureURL: URL, pictureUUID: UUID,
                     soundURL: URL?, soundUUID: UUID?,
                     frameCount: Int, issueDate: Date = Date()) {
             self.folderURL = folderURL
             self.contentTitle = contentTitle
+            self.dcncName = dcncName ?? folderURL.lastPathComponent
             self.container = container
             self.pictureURL = pictureURL
             self.pictureUUID = pictureUUID
@@ -91,11 +96,11 @@ public enum DCPPackage {
           <IssueDate>\(issueDate)</IssueDate>
           <Issuer>\(xmlEscape(issuer))</Issuer>
           <Creator>\(xmlEscape(creator))</Creator>
-          <ContentTitleText>\(xmlEscape(title))</ContentTitleText>
+          <ContentTitleText>\(xmlEscape(input.dcncName))</ContentTitleText>
           <ContentKind>\(contentKind)</ContentKind>
           <ContentVersion>
             <Id>urn:uuid:\(uuidString(contentVersionUUID))</Id>
-            <LabelText>\(xmlEscape(title))_version-1</LabelText>
+            <LabelText>\(xmlEscape(input.dcncName))_version-1</LabelText>
           </ContentVersion>
           <RatingList/>
           <ReelList>

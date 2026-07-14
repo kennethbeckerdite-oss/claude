@@ -30,6 +30,7 @@ final class DCPPackageTests: XCTestCase {
         let output = try DCPPackage.write(
             DCPPackage.Input(folderURL: folderURL,
                              contentTitle: "Test & Title",
+                             dcncName: "TestTitle_SHR-1_F_XX-XX_51_2K_20260714_PRC_SMPTE_OV",
                              container: .flat,
                              pictureURL: pictureURL,
                              pictureUUID: pictureUUID,
@@ -49,9 +50,12 @@ final class DCPPackageTests: XCTestCase {
         XCTAssertEqual(pkl.rootElement()?.uri, "http://www.smpte-ra.org/schemas/429-8/2007/PKL")
         XCTAssertEqual(assetMap.rootElement()?.uri, "http://www.smpte-ra.org/schemas/429-9/2007/AM")
 
-        // CPL: escaped title, correct picture geometry and durations.
+        // CPL: DCNC name as ContentTitleText (ISDCF), escaped human title as
+        // annotation, correct picture geometry and durations.
         let title = try cpl.nodes(forXPath: "//*[local-name()='ContentTitleText']").first?.stringValue
-        XCTAssertEqual(title, "Test & Title")
+        XCTAssertEqual(title, "TestTitle_SHR-1_F_XX-XX_51_2K_20260714_PRC_SMPTE_OV")
+        let annotation = try cpl.nodes(forXPath: "/*/*[local-name()='AnnotationText']").first?.stringValue
+        XCTAssertEqual(annotation, "Test & Title")
         let aspect = try cpl.nodes(forXPath: "//*[local-name()='ScreenAspectRatio']").first?.stringValue
         XCTAssertEqual(aspect, "1998 1080")
         let durations = try cpl.nodes(forXPath: "//*[local-name()='Duration']").compactMap(\.stringValue)

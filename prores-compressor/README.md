@@ -46,11 +46,19 @@ DCP sources must be 24.0 or 23.976 fps (23.976 is conformed to 24 with a 0.1% au
 Layered checks, cheapest first:
 
 1. **Built-in** — every DCP export ends with a self-verification pass (asset hashes vs PKL, CPL/PKL/ASSETMAP cross-references, MXF essence re-read). The UI shows "Exported & verified" only if it passes.
-2. **clairmeta** (independent SMPTE compliance checker):
+2. **clairmeta** (independent SMPTE compliance checker). The PyPI wheel is
+   missing its XSD schemas, so install from GitHub:
    ```sh
-   pipx install clairmeta   # or: pip install clairmeta
-   python -m clairmeta.cli check -type dcp "/path/to/MyFilm_..._DCP"
+   python3 -m venv ~/clairmeta-env
+   ~/clairmeta-env/bin/pip install git+https://github.com/Ymagis/ClairMeta.git
+   ~/clairmeta-env/bin/python -m clairmeta.cli check -type dcp "/path/to/MyFilm_..._DCP"
    ```
+   Optional deeper probes: `brew install mediainfo sox`.
+
+   Note on non-APFS drives (exFAT/NTFS): macOS creates hidden `._*`
+   AppleDouble files next to anything it writes. The exporter strips them,
+   but they reappear whenever Finder copies the DCP — run
+   `dot_clean -m "/path/to/DCP"` after copying to an ingest drive.
 3. **Playback** — open the DCP folder in the free [DCP-o-matic Player](https://dcpomatic.com/) and check picture, color, and audio mapping.
 4. **Real hardware** — before an actual screening, ask the venue/festival for a test ingest on their projection server.
 
