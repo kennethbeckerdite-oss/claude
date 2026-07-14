@@ -109,9 +109,10 @@ public final class J2KEncoder: Sendable {
         let sinkContext = Unmanaged.passUnretained(sink).toOpaque()
         opj_stream_set_user_data(stream, sinkContext, { _ in })
         opj_stream_set_write_function(stream) { buffer, count, context in
-            guard let buffer, let context else { return UInt.max }
+            // OPJ_SIZE_T imports as Int; -1 is the library's failure sentinel.
+            guard let buffer, let context else { return -1 }
             let sink = Unmanaged<J2KOutputSink>.fromOpaque(context).takeUnretainedValue()
-            return UInt(sink.write(buffer, count: Int(count)))
+            return sink.write(buffer, count: count)
         }
         opj_stream_set_skip_function(stream) { count, context in
             guard let context else { return -1 }
@@ -156,7 +157,7 @@ private final class J2KOutputSink {
             bytes.append(contentsOf: repeatElement(0, count: end - bytes.count))
         }
         bytes.withUnsafeMutableBufferPointer { destination in
-            memcpy(destination.baseAddress! + position, source, count)
+            _ = memcpy(destination.baseAddress! + position, source, count)
         }
         position = end
         return count
