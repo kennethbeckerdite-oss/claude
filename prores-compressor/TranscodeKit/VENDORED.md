@@ -10,7 +10,9 @@ unavoidable, record it here.
   (commit `6c4a29b00211eb0430fa0e5e890f1ce5c80f409f`).
 - Contents: `src/lib/openjp2/*.c`/`*.h` except standalone tools
   (`bench_dwt.c`, `t1_generate_luts.c`, `t1_ht_generate_luts.c`,
-  `test_sparse_array.c`).
+  `test_sparse_array.c`) and the JPIP-only index managers
+  (`cidx/phix/ppix/thix/tpix_manager.c`, `indexbox_manager.h` — they
+  only compile under BUILD_JPIP/USE_JPIP).
 - `include/openjpeg.h` is the public header (imported by Swift);
   everything else is target-internal.
 - `include/opj_config.h` and `opj_config_private.h` are hand-generated
