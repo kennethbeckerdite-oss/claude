@@ -36,6 +36,7 @@ final class AppState {
     var dcpContainer: DCPContainer = .flat
     var dcpBitrateMbps: Double = 125
     var dcpContentTitle: String = ""
+    var dcpDCNC = DCNCOptions()
 
     private var exportTask: Task<Void, Never>?
     private var sleepActivity: NSObjectProtocol?
@@ -46,9 +47,9 @@ final class AppState {
         Task {
             do {
                 let source = try await SourceProbe.probe(url: url)
-                if dcpContentTitle.isEmpty {
-                    dcpContentTitle = url.deletingPathExtension().lastPathComponent
-                }
+                // Follow the loaded file — a stale title from a previous file
+                // must never leak into the next export's naming.
+                dcpContentTitle = url.deletingPathExtension().lastPathComponent
                 phase = .configuring(source)
             } catch {
                 phase = .failed(nil, error.localizedDescription)
@@ -77,7 +78,8 @@ final class AppState {
                 contentTitle: dcpContentTitle.isEmpty
                     ? source.url.deletingPathExtension().lastPathComponent : dcpContentTitle,
                 container: dcpContainer,
-                j2kBitsPerSecond: Int(dcpBitrateMbps * 1_000_000)))
+                j2kBitsPerSecond: Int(dcpBitrateMbps * 1_000_000),
+                dcnc: dcpDCNC))
         }
 
         progress = nil

@@ -8,11 +8,14 @@ public struct DCPSettings: Sendable, Equatable {
     public var contentTitle: String
     public var container: DCPContainer
     public var j2kBitsPerSecond: Int
+    public var dcnc: DCNCOptions
 
-    public init(contentTitle: String, container: DCPContainer, j2kBitsPerSecond: Int = 125_000_000) {
+    public init(contentTitle: String, container: DCPContainer,
+                j2kBitsPerSecond: Int = 125_000_000, dcnc: DCNCOptions = DCNCOptions()) {
         self.contentTitle = contentTitle
         self.container = container
         self.j2kBitsPerSecond = j2kBitsPerSecond
+        self.dcnc = dcnc
     }
 }
 
@@ -90,6 +93,7 @@ public final class DCPExporter: Exporter {
         _ = try DCPPackage.write(DCPPackage.Input(
             folderURL: folderURL,
             contentTitle: settings.contentTitle,
+            contentKind: settings.dcnc.resolvedKind(frameCount: frameCount).contentKind,
             container: container,
             pictureURL: pictureURL,
             pictureUUID: pictureUUID,
@@ -256,7 +260,8 @@ public final class DCPExporter: Exporter {
         let name = DCPPackage.folderName(contentTitle: settings.contentTitle,
                                          container: settings.container,
                                          frameCount: estimatedFrames,
-                                         hasAudio: source.hasAudio)
+                                         hasAudio: source.hasAudio,
+                                         options: settings.dcnc)
         let parent = source.url.deletingLastPathComponent()
         var candidate = parent.appendingPathComponent(name, isDirectory: true)
         var counter = 2

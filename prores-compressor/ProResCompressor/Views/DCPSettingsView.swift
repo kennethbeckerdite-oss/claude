@@ -29,6 +29,33 @@ struct DCPSettingsView: View {
                 }
             }
 
+            Picker("Kind", selection: $appState.dcpDCNC.kind) {
+                ForEach(DCNCOptions.Kind.allCases, id: \.self) { kind in
+                    Text(kind == .auto ? "Auto (by duration)" : kind.rawValue).tag(kind)
+                }
+            }
+
+            LabeledContent("Language / Subs / Facility") {
+                HStack {
+                    TextField("XX", text: $appState.dcpDCNC.audioLanguage)
+                        .frame(width: 44)
+                    TextField("XX", text: $appState.dcpDCNC.subtitleLanguage)
+                        .frame(width: 44)
+                    TextField("PRC", text: $appState.dcpDCNC.facility)
+                        .frame(width: 60)
+                }
+                .multilineTextAlignment(.center)
+            }
+
+            LabeledContent("Package name") {
+                Text(namePreview)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+
             if !frameRateSupported {
                 Label("DCP requires a 24 or 23.976 fps source (this file is \(String(format: "%.3f", source.frameRate)) fps).",
                       systemImage: "exclamationmark.triangle")
@@ -40,6 +67,16 @@ struct DCPSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var namePreview: String {
+        DCPPackage.folderName(
+            contentTitle: appState.dcpContentTitle.isEmpty
+                ? source.url.deletingPathExtension().lastPathComponent : appState.dcpContentTitle,
+            container: appState.dcpContainer,
+            frameCount: max(1, Int((source.duration * 24).rounded())),
+            hasAudio: source.hasAudio,
+            options: appState.dcpDCNC)
     }
 
     private var frameRateSupported: Bool {
