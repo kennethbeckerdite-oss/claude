@@ -3,6 +3,7 @@
 #include "asdcp_shim.h"
 
 #include <AS_DCP.h>
+#include <KM_fileio.h>
 #include <KM_util.h>
 
 #include <cstdio>
@@ -253,7 +254,8 @@ int asdcp_read_j2k_info(const char *path, asdcp_j2k_info *out,
         return -1;
     }
 
-    JP2K::MXFReader reader;
+    Kumu::FileReaderFactory readerFactory;
+    JP2K::MXFReader reader(readerFactory);
     Result_t result = reader.OpenRead(path);
 
     JP2K::PictureDescriptor pdesc;
@@ -288,7 +290,8 @@ int asdcp_read_pcm_info(const char *path, asdcp_pcm_info *out,
         return -1;
     }
 
-    PCM::MXFReader reader;
+    Kumu::FileReaderFactory readerFactory;
+    PCM::MXFReader reader(readerFactory);
     Result_t result = reader.OpenRead(path);
 
     PCM::AudioDescriptor adesc;
