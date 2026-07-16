@@ -97,8 +97,14 @@ public final class AudioConformer {
         peakSample > 0 ? 20 * log10(Double(peakSample)) : nil
     }
 
+    /// Integrated loudness (LUFS, BS.1770) of the delivered 6-channel program.
+    public var integratedLUFS: Double? { loudnessMeter.integratedLUFS() }
+
     public var channelMappingDescription: String { channelMap.description }
     public var channelMappingVerified: Bool { channelMap.verified }
+
+    /// Measures the delivered SMPTE-ordered 6-channel program (LFE excluded).
+    private let loudnessMeter = LoudnessMeter(channelCount: 6, sampleRate: Double(AudioConformer.sampleRate))
 
     public init(source: ProbedSource, editRate: EditRate, needsPullUp: Bool) throws {
         samplesPerFrame = editRate.audioSamplesPerFrame
@@ -283,17 +289,26 @@ public final class AudioConformer {
     func packFrame(sourceInterleaved: [Float]) -> Data {
         let channels = readChannels
         let slots = channelMap.slots
+
+        // Assemble the delivered 6-channel float frame in SMPTE order once;
+        // it feeds both the loudness meter and the 24-bit quantizer.
+        var smpte = [Float](repeating: 0, count: samplesPerFrame * Self.channelCount)
+        for sampleIndex in 0..<samplesPerFrame {
+            let sourceBase = sampleIndex * channels
+            let outBase = sampleIndex * Self.channelCount
+            for slot in 0..<Self.channelCount {
+                if let sourceChannel = slots[slot], sourceChannel < channels {
+                    smpte[outBase + slot] = sourceInterleaved[sourceBase + sourceChannel]
+                }
+            }
+        }
+        loudnessMeter.add(smpte, frameCount: samplesPerFrame)
+
         var frame = Data(count: bytesPerFrame)
         frame.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
             let bytes = raw.bindMemory(to: UInt8.self).baseAddress!
-            for sampleIndex in 0..<samplesPerFrame {
-                let sourceBase = sampleIndex * channels
-                let destinationBase = sampleIndex * Self.channelCount * Self.bytesPerSample
-                for slot in 0..<Self.channelCount {
-                    guard let sourceChannel = slots[slot], sourceChannel < channels else { continue }
-                    let value = Self.quantize24(sourceInterleaved[sourceBase + sourceChannel])
-                    Self.writeSample(value, to: bytes + destinationBase + slot * Self.bytesPerSample)
-                }
+            for index in 0..<(samplesPerFrame * Self.channelCount) {
+                Self.writeSample(Self.quantize24(smpte[index]), to: bytes + index * Self.bytesPerSample)
             }
         }
         return frame

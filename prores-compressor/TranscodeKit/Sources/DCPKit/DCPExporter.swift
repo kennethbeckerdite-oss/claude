@@ -151,6 +151,7 @@ public final class DCPExporter: Exporter {
 
     private struct AudioQC {
         let peakDBFS: Double?
+        let loudnessLUFS: Double?
         let mappingDescription: String
         let mappingVerified: Bool
     }
@@ -233,6 +234,7 @@ public final class DCPExporter: Exporter {
                 lines.append("Audio: 6-channel (L R C LFE Ls Rs), 24-bit, 48 kHz")
                 lines.append("Audio mapping: \(audioQC.mappingDescription)")
                 lines.append("Audio peak: \(QCReport.formatPeak(dbfs: audioQC.peakDBFS))")
+                lines.append("Loudness: \(LoudnessAdvice.describe(lufs: audioQC.loudnessLUFS))")
                 if !audioQC.mappingVerified {
                     lines.append("⚠️ Channel order was not verifiable — listen to a surround check before screening.")
                 }
@@ -383,6 +385,7 @@ public final class DCPExporter: Exporter {
         }
         try writer.finish()
         return AudioQC(peakDBFS: conformer.peakDBFS,
+                       loudnessLUFS: conformer.integratedLUFS,
                        mappingDescription: conformer.channelMappingDescription,
                        mappingVerified: conformer.channelMappingVerified)
     }

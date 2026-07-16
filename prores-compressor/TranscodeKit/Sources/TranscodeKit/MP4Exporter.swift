@@ -100,6 +100,8 @@ private final class MP4ExportSession: @unchecked Sendable {
     private var cancelled = false
     private var startedAt = Date()
     private var audioPeak: Float = 0
+    /// Touched only on the audio pump queue; read after writing finishes.
+    private let loudnessMeter: LoudnessMeter?
 
     init(source: ProbedSource, settings: MP4Settings, outputURL: URL,
          onProgress: @escaping @Sendable (ExportProgress) -> Void) throws {
@@ -107,6 +109,12 @@ private final class MP4ExportSession: @unchecked Sendable {
         self.settings = settings
         self.onProgress = onProgress
         self.outputURL = outputURL
+        // Reader delivers source-rate/channel interleaved float PCM; meter it
+        // as-is (advisory — for >2ch the source channel order is assumed).
+        loudnessMeter = source.hasAudio
+            ? LoudnessMeter(channelCount: max(1, source.audioChannels),
+                            sampleRate: source.audioSampleRate > 0 ? source.audioSampleRate : 48_000)
+            : nil
 
         let asset = AVURLAsset(url: source.url)
         // Tracks were loaded by SourceProbe; the synchronous accessor is safe here.
@@ -325,11 +333,16 @@ private final class MP4ExportSession: @unchecked Sendable {
                                           totalLengthOut: &length,
                                           dataPointerOut: &pointer) == kCMBlockBufferNoErr,
               let pointer, length >= MemoryLayout<Float>.size else { return }
+        let floatCount = length / MemoryLayout<Float>.size
         var peak: Float = 0
-        pointer.withMemoryRebound(to: Float.self, capacity: length / MemoryLayout<Float>.size) { floats in
-            for index in 0..<(length / MemoryLayout<Float>.size) {
+        pointer.withMemoryRebound(to: Float.self, capacity: floatCount) { floats in
+            for index in 0..<floatCount {
                 let magnitude = abs(floats[index])
                 if magnitude > peak { peak = magnitude }
+            }
+            if let meter = loudnessMeter, source.audioChannels > 0 {
+                meter.add(interleaved: UnsafeBufferPointer(start: floats, count: floatCount),
+                          frameCount: floatCount / source.audioChannels)
             }
         }
         lock.lock()
@@ -394,9 +407,12 @@ private final class MP4ExportSession: @unchecked Sendable {
             lock.lock()
             let peak = audioPeak
             lock.unlock()
+            let lufs = loudnessMeter?.integratedLUFS()
+            let loudnessLabel = source.audioChannels > 2 ? " (source, approximate)" : ""
             report.add("Audio", [
                 "AAC stereo \(settings.audioBitsPerSecond / 1000) kb/s",
                 "Peak: \(QCReport.formatPeak(dbfs: peak > 0 ? 20 * log10(Double(peak)) : nil))",
+                "Loudness\(loudnessLabel): \(LoudnessAdvice.describe(lufs: lufs))",
             ])
         }
 
