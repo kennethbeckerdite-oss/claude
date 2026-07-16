@@ -26,7 +26,11 @@ Done in v2 workstream A (needs Kenneth's build verification):
 - [x] **QC report per export** — `QCReport` written next to MP4 (`….QC.txt`) and DCP (`<Folder>_QC.txt`, outside the folder); includes sample peak, mapping, PKL hashes, validator verdict. `ExportResult.qcReportURL` + DoneView button.
 - [x] **Zip for Upload** — DoneView button, `ditto -c -k --norsrc --noqtn` (AppleDouble-free archive).
 
-Next (workstream B — DCP flexibility, one refactor: 25/30 fps + multi-composition packages; each video gets its OWN CPL inside ONE package per Kenneth's spec):
+Done in v2 workstream B (needs Kenneth's build verification):
+- [x] **25/30 fps DCP support** (+ 23.976/29.97 conform) — new `EditRate` type threads fps through `AudioConformer` (instance samples/frame), `J2KEncoder` (fps-scaled DCI ceiling), `DCPPackage` CPL EditRate/FrameRate, and `DCPValidator` (reads each CPL's own rate).
+- [x] **Multi-composition packages** — `DCPPackage.writePackage([Composition])` emits one CPL per video, one shared PKL/ASSETMAP/VOLINDEX. `DCPExporter` loops per `DCPElement`; DCP settings pane has an "Add video…" list. Each video = its own title on the cinema server.
+
+Next (workstream C — audio confidence + subtitles):
 - [ ] **25/30 fps DCP support**: SMPTE allows 24/25/30; app currently rejects non-24. Edit rate is already parameterized through MXF/CPL — relax the gate, adjust audio samples-per-frame (48000/25=1920, 48000/30=1600) and bitrate caps per rate.
 - [ ] **Multi-reel DCP** (Kenneth's back-to-back request): several videos in ONE composition — CPL with N reels, each reel its own picture/sound MXF pair; servers play them seamlessly. UI = ordered file list. CPL generator already emits a reel list with one entry.
 - [ ] **Batch queue** (HandBrake-style): multiple files/settings; the key pairing is MP4 screener + DCP from the same master in one run.
@@ -67,7 +71,7 @@ Strict engine/UI split. The app target (`ProResCompressor/`) is a thin SwiftUI l
 ## Domain conventions
 
 - MP4 size targeting: bitrate computed by `BitrateCalculator` with a 0.97 safety factor so output lands under the requested cap; 10-bit sources get HEVC Main10 and source color properties are passed through. Output dimensions always derive from `naturalSize` (PAR-corrected), never coded dimensions.
-- DCP invariants: 12-bit X'Y'Z' (gamma 2.6, 48 cd/m² reference), DCI Cinema2K profile (≤250 Mbps), 6-channel 5.1-padded 24-bit/48 kHz audio, SMPTE ST 429 XML. Only 24.0/23.976 fps sources are accepted (23.976 conformed to 24 with 0.1% audio resample). CPL `ContentTitleText` carries the full DCNC name; the human title goes in `AnnotationText`.
+- DCP invariants: 12-bit X'Y'Z' (gamma 2.6, 48 cd/m² reference), DCI Cinema2K profile (≤250 Mbps, a bitrate — so the per-frame byte cap scales with fps), 6-channel 5.1-padded 24-bit/48 kHz audio, SMPTE ST 429 XML. Supported rates: 24/25/30 (plus 23.976→24 and 29.97→30, each with the 0.1% audio pull-up); `EditRate` in DCPKit is the single source of truth for fps → edit rate, audio samples/frame, and CPL strings. A package may hold multiple compositions (one CPL each); `DCPPackage.write` is the single-composition convenience over `writePackage([Composition])`. CPL `ContentTitleText` carries the full DCNC name; the human title goes in `AnnotationText`.
 - Every DCP export must end with the `DCPValidator` self-check; never report success without it.
 
 ## DCNC package naming (what the folder name means)

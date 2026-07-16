@@ -7,8 +7,11 @@ import TranscodeKit
 /// through asdcplib's reader.
 public enum DCPValidator {
     public struct Report {
+        /// Total picture frames across all compositions.
         public let frameCount: Int
         public let checkedAssets: Int
+        /// Number of compositions (CPLs) validated.
+        public let compositions: Int
     }
 
     @discardableResult
@@ -78,59 +81,82 @@ public enum DCPValidator {
             checked += 1
         }
 
-        // CPL: assets must resolve, durations must agree with the MXFs.
-        guard let cplURL = fileByUUID.values.first(where: { $0.lastPathComponent.hasPrefix("CPL_") }) else {
+        // CPLs: every composition's picture (and sound) must agree with its MXFs.
+        let cplURLs = fileByUUID.values
+            .filter { $0.lastPathComponent.hasPrefix("CPL_") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !cplURLs.isEmpty else {
             throw ExportError.validationFailed("no CPL in the ASSETMAP")
         }
-        let cpl = try xmlDocument(at: cplURL)
-        guard let pictureId = try firstString(cpl, "//*[local-name()='MainPicture']/*[local-name()='Id']"),
-              let pictureDurationText = try firstString(cpl, "//*[local-name()='MainPicture']/*[local-name()='Duration']"),
-              let cplDuration = Int(pictureDurationText) else {
-            throw ExportError.validationFailed("CPL has no readable MainPicture")
-        }
-        guard let pictureURL = fileByUUID[normalize(pictureId)] else {
-            throw ExportError.validationFailed("CPL MainPicture \(pictureId) is not in the ASSETMAP")
-        }
 
-        let pictureInfo = try J2KTrackInfo.read(url: pictureURL)
-        guard pictureInfo.frameCount == cplDuration else {
-            throw ExportError.validationFailed(
-                "picture MXF has \(pictureInfo.frameCount) frames but the CPL says \(cplDuration)")
-        }
-        guard pictureInfo.editRate == (24, 1) else {
-            throw ExportError.validationFailed("picture MXF edit rate is not 24/1")
-        }
-        guard pictureInfo.storedWidth == expectedContainer.width,
-              pictureInfo.storedHeight == expectedContainer.height else {
-            throw ExportError.validationFailed(
-                "picture is \(pictureInfo.storedWidth)×\(pictureInfo.storedHeight), expected \(expectedContainer.width)×\(expectedContainer.height)")
-        }
-        guard normalize("urn:uuid:" + pictureInfo.assetUUID.uuidString) == normalize(pictureId) else {
-            throw ExportError.validationFailed("picture MXF asset UUID does not match the CPL")
-        }
+        var totalFrames = 0
+        var anySound = false
+        for cplURL in cplURLs {
+            let cpl = try xmlDocument(at: cplURL)
+            let name = cplURL.lastPathComponent
 
-        let soundId = try firstString(cpl, "//*[local-name()='MainSound']/*[local-name()='Id']")
-        if expectSound {
-            guard let soundId, let soundURL = fileByUUID[normalize(soundId)] else {
-                throw ExportError.validationFailed("CPL is missing the MainSound asset")
+            guard let pictureId = try firstString(cpl, "//*[local-name()='MainPicture']/*[local-name()='Id']"),
+                  let pictureDurationText = try firstString(cpl, "//*[local-name()='MainPicture']/*[local-name()='Duration']"),
+                  let cplDuration = Int(pictureDurationText),
+                  let editRateText = try firstString(cpl, "//*[local-name()='MainPicture']/*[local-name()='EditRate']") else {
+                throw ExportError.validationFailed("\(name) has no readable MainPicture")
             }
-            let soundInfo = try PCMTrackInfo.read(url: soundURL)
-            guard soundInfo.frameCount == cplDuration else {
+            let editRateParts = editRateText.split(separator: " ").compactMap { Int($0) }
+            guard editRateParts.count == 2 else {
+                throw ExportError.validationFailed("\(name) MainPicture EditRate is malformed: '\(editRateText)'")
+            }
+            let cplEditRate = (editRateParts[0], editRateParts[1])
+            guard let pictureURL = fileByUUID[normalize(pictureId)] else {
+                throw ExportError.validationFailed("\(name) MainPicture \(pictureId) is not in the ASSETMAP")
+            }
+
+            let pictureInfo = try J2KTrackInfo.read(url: pictureURL)
+            guard pictureInfo.frameCount == cplDuration else {
                 throw ExportError.validationFailed(
-                    "audio MXF has \(soundInfo.frameCount) frames but the CPL says \(cplDuration)")
+                    "\(name): picture MXF has \(pictureInfo.frameCount) frames but the CPL says \(cplDuration)")
             }
-            guard soundInfo.channelCount == AudioConformer.channelCount,
-                  soundInfo.quantizationBits == 24,
-                  soundInfo.sampleRate == AudioConformer.sampleRate else {
+            guard pictureInfo.editRate == cplEditRate else {
                 throw ExportError.validationFailed(
-                    "audio MXF is \(soundInfo.channelCount)ch/\(soundInfo.quantizationBits)-bit/\(soundInfo.sampleRate)Hz, expected 6ch/24-bit/48000Hz")
+                    "\(name): picture MXF edit rate \(pictureInfo.editRate.0)/\(pictureInfo.editRate.1) ≠ CPL \(cplEditRate.0)/\(cplEditRate.1)")
             }
-            guard normalize("urn:uuid:" + soundInfo.assetUUID.uuidString) == normalize(soundId) else {
-                throw ExportError.validationFailed("audio MXF asset UUID does not match the CPL")
+            guard pictureInfo.storedWidth == expectedContainer.width,
+                  pictureInfo.storedHeight == expectedContainer.height else {
+                throw ExportError.validationFailed(
+                    "\(name): picture is \(pictureInfo.storedWidth)×\(pictureInfo.storedHeight), expected \(expectedContainer.width)×\(expectedContainer.height)")
             }
+            guard normalize("urn:uuid:" + pictureInfo.assetUUID.uuidString) == normalize(pictureId) else {
+                throw ExportError.validationFailed("\(name): picture MXF asset UUID does not match the CPL")
+            }
+
+            if let soundId = try firstString(cpl, "//*[local-name()='MainSound']/*[local-name()='Id']") {
+                anySound = true
+                guard let soundURL = fileByUUID[normalize(soundId)] else {
+                    throw ExportError.validationFailed("\(name): MainSound \(soundId) is not in the ASSETMAP")
+                }
+                let soundInfo = try PCMTrackInfo.read(url: soundURL)
+                guard soundInfo.frameCount == cplDuration else {
+                    throw ExportError.validationFailed(
+                        "\(name): audio MXF has \(soundInfo.frameCount) frames but the CPL says \(cplDuration)")
+                }
+                guard soundInfo.channelCount == AudioConformer.channelCount,
+                      soundInfo.quantizationBits == 24,
+                      soundInfo.sampleRate == AudioConformer.sampleRate else {
+                    throw ExportError.validationFailed(
+                        "\(name): audio MXF is \(soundInfo.channelCount)ch/\(soundInfo.quantizationBits)-bit/\(soundInfo.sampleRate)Hz, expected 6ch/24-bit/48000Hz")
+                }
+                guard normalize("urn:uuid:" + soundInfo.assetUUID.uuidString) == normalize(soundId) else {
+                    throw ExportError.validationFailed("\(name): audio MXF asset UUID does not match the CPL")
+                }
+            }
+
+            totalFrames += cplDuration
         }
 
-        return Report(frameCount: cplDuration, checkedAssets: checked)
+        if expectSound, !anySound {
+            throw ExportError.validationFailed("expected sound but no composition has a MainSound asset")
+        }
+
+        return Report(frameCount: totalFrames, checkedAssets: checked, compositions: cplURLs.count)
     }
 
     // MARK: - XML helpers

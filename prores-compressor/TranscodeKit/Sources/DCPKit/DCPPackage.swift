@@ -67,6 +67,7 @@ public enum DCPPackage {
         /// SMPTE 429-7 ContentKind vocabulary value ("feature", "short", …).
         public let contentKind: String?
         public let container: DCPContainer
+        public let editRate: EditRate
         public let pictureURL: URL
         public let pictureUUID: UUID
         public let soundURL: URL?
@@ -76,7 +77,7 @@ public enum DCPPackage {
 
         public init(folderURL: URL, contentTitle: String, dcncName: String? = nil,
                     contentKind: String? = nil,
-                    container: DCPContainer,
+                    container: DCPContainer, editRate: EditRate = .fps24,
                     pictureURL: URL, pictureUUID: UUID,
                     soundURL: URL?, soundUUID: UUID?,
                     frameCount: Int, issueDate: Date = Date()) {
@@ -85,6 +86,7 @@ public enum DCPPackage {
             self.dcncName = dcncName ?? folderURL.lastPathComponent
             self.contentKind = contentKind
             self.container = container
+            self.editRate = editRate
             self.pictureURL = pictureURL
             self.pictureUUID = pictureUUID
             self.soundURL = soundURL
@@ -94,8 +96,49 @@ public enum DCPPackage {
         }
     }
 
+    /// One composition (one CPL / one title on the cinema server). A package
+    /// holds one or more; each carries its own edit rate, container, and title.
+    public struct Composition {
+        public var dcncName: String
+        public var contentTitle: String
+        public var contentKind: String
+        public var container: DCPContainer
+        public var editRate: EditRate
+        public var pictureURL: URL
+        public var pictureUUID: UUID
+        public var soundURL: URL?
+        public var soundUUID: UUID?
+        public var frameCount: Int
+        public var cplUUID: UUID
+        public var contentVersionUUID: UUID
+        public var reelUUID: UUID
+
+        public init(dcncName: String, contentTitle: String, contentKind: String,
+                    container: DCPContainer, editRate: EditRate,
+                    pictureURL: URL, pictureUUID: UUID,
+                    soundURL: URL?, soundUUID: UUID?, frameCount: Int,
+                    cplUUID: UUID = UUID(), contentVersionUUID: UUID = UUID(),
+                    reelUUID: UUID = UUID()) {
+            self.dcncName = dcncName
+            self.contentTitle = contentTitle
+            self.contentKind = contentKind
+            self.container = container
+            self.editRate = editRate
+            self.pictureURL = pictureURL
+            self.pictureUUID = pictureUUID
+            self.soundURL = soundURL
+            self.soundUUID = soundUUID
+            self.frameCount = frameCount
+            self.cplUUID = cplUUID
+            self.contentVersionUUID = contentVersionUUID
+            self.reelUUID = reelUUID
+        }
+    }
+
     public struct Output {
-        public let cplURL: URL
+        /// First composition's CPL (convenience for the single-composition case).
+        public var cplURL: URL { cplURLs[0] }
+        public let cplURLs: [URL]
         public let pklURL: URL
         public let assetMapURL: URL
         public let volIndexURL: URL
@@ -104,86 +147,66 @@ public enum DCPPackage {
         public let assetHashes: [(name: String, sha1: String)]
     }
 
-    /// Writes CPL, PKL, ASSETMAP, VOLINDEX next to the track files.
-    /// Track files must be finalized before calling (they get hashed).
+    /// Single-composition convenience — writes one CPL plus the package
+    /// wrapper. Kept for the common one-video export and existing tests.
+    @discardableResult
     public static func write(_ input: Input,
                              cplUUID: UUID = UUID(),
                              pklUUID: UUID = UUID(),
                              assetMapUUID: UUID = UUID(),
                              contentVersionUUID: UUID = UUID(),
                              reelUUID: UUID = UUID()) throws -> Output {
-        let title = input.contentTitle
-        let issueDate = iso8601(input.issueDate)
-
-        // --- CPL ---
-        let cplName = "CPL_\(uuidString(cplUUID)).xml"
-        let cplURL = input.folderURL.appendingPathComponent(cplName)
         let contentKind = input.contentKind
-            ?? (input.frameCount < 40 * 60 * 24 ? "short" : "feature")
+            ?? (input.frameCount < 40 * 60 * input.editRate.fps ? "short" : "feature")
+        let composition = Composition(
+            dcncName: input.dcncName,
+            contentTitle: input.contentTitle,
+            contentKind: contentKind,
+            container: input.container,
+            editRate: input.editRate,
+            pictureURL: input.pictureURL,
+            pictureUUID: input.pictureUUID,
+            soundURL: input.soundURL,
+            soundUUID: input.soundUUID,
+            frameCount: input.frameCount,
+            cplUUID: cplUUID,
+            contentVersionUUID: contentVersionUUID,
+            reelUUID: reelUUID)
+        return try writePackage(folderURL: input.folderURL, compositions: [composition],
+                                issueDate: input.issueDate,
+                                pklUUID: pklUUID, assetMapUUID: assetMapUUID)
+    }
 
-        var reelAssets = """
-                <MainPicture>
-                  <Id>urn:uuid:\(uuidString(input.pictureUUID))</Id>
-                  <AnnotationText>\(xmlEscape(input.pictureURL.lastPathComponent))</AnnotationText>
-                  <EditRate>24 1</EditRate>
-                  <IntrinsicDuration>\(input.frameCount)</IntrinsicDuration>
-                  <EntryPoint>0</EntryPoint>
-                  <Duration>\(input.frameCount)</Duration>
-                  <FrameRate>24 1</FrameRate>
-                  <ScreenAspectRatio>\(input.container.width) \(input.container.height)</ScreenAspectRatio>
-                </MainPicture>
-        """
-        if let soundURL = input.soundURL, let soundUUID = input.soundUUID {
-            reelAssets += "\n" + """
-                <MainSound>
-                  <Id>urn:uuid:\(uuidString(soundUUID))</Id>
-                  <AnnotationText>\(xmlEscape(soundURL.lastPathComponent))</AnnotationText>
-                  <EditRate>24 1</EditRate>
-                  <IntrinsicDuration>\(input.frameCount)</IntrinsicDuration>
-                  <EntryPoint>0</EntryPoint>
-                  <Duration>\(input.frameCount)</Duration>
-                </MainSound>
-        """
+    /// Writes a complete DCP: one CPL per composition, then a single PKL,
+    /// ASSETMAP, and VOLINDEX covering all of them. Track files must be
+    /// finalized before calling (they get hashed).
+    @discardableResult
+    public static func writePackage(folderURL: URL, compositions: [Composition],
+                                    issueDate issueDateValue: Date = Date(),
+                                    pklUUID: UUID = UUID(),
+                                    assetMapUUID: UUID = UUID()) throws -> Output {
+        precondition(!compositions.isEmpty, "a DCP package needs at least one composition")
+        let issueDate = iso8601(issueDateValue)
+        // The package's overall annotation is the first composition's title.
+        let packageTitle = compositions[0].contentTitle
+
+        // --- CPLs (one per composition) ---
+        var cplURLs: [URL] = []
+        for composition in compositions {
+            let cplURL = folderURL.appendingPathComponent("CPL_\(uuidString(composition.cplUUID)).xml")
+            try write(xml: makeCPLXML(composition, issueDate: issueDate), to: cplURL)
+            cplURLs.append(cplURL)
         }
 
-        let cpl = """
-        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-        <CompositionPlaylist xmlns="http://www.smpte-ra.org/schemas/429-7/2006/CPL">
-          <Id>urn:uuid:\(uuidString(cplUUID))</Id>
-          <AnnotationText>\(xmlEscape(title))</AnnotationText>
-          <IssueDate>\(issueDate)</IssueDate>
-          <Issuer>\(xmlEscape(issuer))</Issuer>
-          <Creator>\(xmlEscape(creator))</Creator>
-          <ContentTitleText>\(xmlEscape(input.dcncName))</ContentTitleText>
-          <ContentKind>\(contentKind)</ContentKind>
-          <ContentVersion>
-            <Id>urn:uuid:\(uuidString(contentVersionUUID))</Id>
-            <LabelText>\(xmlEscape(input.dcncName))_version-1</LabelText>
-          </ContentVersion>
-          <RatingList/>
-          <ReelList>
-            <Reel>
-              <Id>urn:uuid:\(uuidString(reelUUID))</Id>
-              <AssetList>
-        \(reelAssets)
-              </AssetList>
-            </Reel>
-          </ReelList>
-        </CompositionPlaylist>
-        """
-        try write(xml: cpl, to: cplURL)
-
-        // --- PKL (hashes cover the finalized MXFs and the CPL just written) ---
-        let pklName = "PKL_\(uuidString(pklUUID)).xml"
-        let pklURL = input.folderURL.appendingPathComponent(pklName)
-
-        var pklAssetEntries: [(uuid: UUID, url: URL, type: String)] = [
-            (input.pictureUUID, input.pictureURL, "application/mxf"),
-        ]
-        if let soundURL = input.soundURL, let soundUUID = input.soundUUID {
-            pklAssetEntries.append((soundUUID, soundURL, "application/mxf"))
+        // --- PKL: all MXFs + all CPLs ---
+        var pklAssetEntries: [(uuid: UUID, url: URL, type: String)] = []
+        for (index, composition) in compositions.enumerated() {
+            pklAssetEntries.append((composition.pictureUUID, composition.pictureURL, "application/mxf"))
+            if let soundURL = composition.soundURL, let soundUUID = composition.soundUUID {
+                pklAssetEntries.append((soundUUID, soundURL, "application/mxf"))
+            }
+            pklAssetEntries.append((composition.cplUUID, cplURLs[index], "text/xml"))
         }
-        pklAssetEntries.append((cplUUID, cplURL, "text/xml"))
 
         var pklAssets = ""
         var assetHashes: [(name: String, sha1: String)] = []
@@ -204,11 +227,12 @@ public enum DCPPackage {
         """
         }
 
+        let pklURL = folderURL.appendingPathComponent("PKL_\(uuidString(pklUUID)).xml")
         let pkl = """
         <?xml version="1.0" encoding="UTF-8" standalone="no"?>
         <PackingList xmlns="http://www.smpte-ra.org/schemas/429-8/2007/PKL">
           <Id>urn:uuid:\(uuidString(pklUUID))</Id>
-          <AnnotationText>\(xmlEscape(title))</AnnotationText>
+          <AnnotationText>\(xmlEscape(packageTitle))</AnnotationText>
           <IssueDate>\(issueDate)</IssueDate>
           <Issuer>\(xmlEscape(issuer))</Issuer>
           <Creator>\(xmlEscape(creator))</Creator>
@@ -219,16 +243,14 @@ public enum DCPPackage {
         """
         try write(xml: pkl, to: pklURL)
 
-        // --- ASSETMAP ---
-        let assetMapURL = input.folderURL.appendingPathComponent("ASSETMAP.xml")
-
-        var mapEntries: [(uuid: UUID, url: URL, isPKL: Bool)] = [
-            (pklUUID, pklURL, true),
-            (cplUUID, cplURL, false),
-            (input.pictureUUID, input.pictureURL, false),
-        ]
-        if let soundURL = input.soundURL, let soundUUID = input.soundUUID {
-            mapEntries.append((soundUUID, soundURL, false))
+        // --- ASSETMAP: PKL first, then every CPL + MXF ---
+        var mapEntries: [(uuid: UUID, url: URL, isPKL: Bool)] = [(pklUUID, pklURL, true)]
+        for (index, composition) in compositions.enumerated() {
+            mapEntries.append((composition.cplUUID, cplURLs[index], false))
+            mapEntries.append((composition.pictureUUID, composition.pictureURL, false))
+            if let soundURL = composition.soundURL, let soundUUID = composition.soundUUID {
+                mapEntries.append((soundUUID, soundURL, false))
+            }
         }
 
         var mapAssets = ""
@@ -251,11 +273,12 @@ public enum DCPPackage {
         """
         }
 
+        let assetMapURL = folderURL.appendingPathComponent("ASSETMAP.xml")
         let assetMap = """
         <?xml version="1.0" encoding="UTF-8" standalone="no"?>
         <AssetMap xmlns="http://www.smpte-ra.org/schemas/429-9/2007/AM">
           <Id>urn:uuid:\(uuidString(assetMapUUID))</Id>
-          <AnnotationText>\(xmlEscape(title))</AnnotationText>
+          <AnnotationText>\(xmlEscape(packageTitle))</AnnotationText>
           <Creator>\(xmlEscape(creator))</Creator>
           <VolumeCount>1</VolumeCount>
           <IssueDate>\(issueDate)</IssueDate>
@@ -268,7 +291,7 @@ public enum DCPPackage {
         try write(xml: assetMap, to: assetMapURL)
 
         // --- VOLINDEX ---
-        let volIndexURL = input.folderURL.appendingPathComponent("VOLINDEX.xml")
+        let volIndexURL = folderURL.appendingPathComponent("VOLINDEX.xml")
         let volIndex = """
         <?xml version="1.0" encoding="UTF-8" standalone="no"?>
         <VolumeIndex xmlns="http://www.smpte-ra.org/schemas/429-9/2007/AM">
@@ -277,9 +300,63 @@ public enum DCPPackage {
         """
         try write(xml: volIndex, to: volIndexURL)
 
-        return Output(cplURL: cplURL, pklURL: pklURL,
+        return Output(cplURLs: cplURLs, pklURL: pklURL,
                       assetMapURL: assetMapURL, volIndexURL: volIndexURL,
                       assetHashes: assetHashes)
+    }
+
+    private static func makeCPLXML(_ composition: Composition, issueDate: String) -> String {
+        let editRate = composition.editRate.xmlString
+        var reelAssets = """
+                <MainPicture>
+                  <Id>urn:uuid:\(uuidString(composition.pictureUUID))</Id>
+                  <AnnotationText>\(xmlEscape(composition.pictureURL.lastPathComponent))</AnnotationText>
+                  <EditRate>\(editRate)</EditRate>
+                  <IntrinsicDuration>\(composition.frameCount)</IntrinsicDuration>
+                  <EntryPoint>0</EntryPoint>
+                  <Duration>\(composition.frameCount)</Duration>
+                  <FrameRate>\(editRate)</FrameRate>
+                  <ScreenAspectRatio>\(composition.container.width) \(composition.container.height)</ScreenAspectRatio>
+                </MainPicture>
+        """
+        if let soundURL = composition.soundURL, let soundUUID = composition.soundUUID {
+            reelAssets += "\n" + """
+                <MainSound>
+                  <Id>urn:uuid:\(uuidString(soundUUID))</Id>
+                  <AnnotationText>\(xmlEscape(soundURL.lastPathComponent))</AnnotationText>
+                  <EditRate>\(editRate)</EditRate>
+                  <IntrinsicDuration>\(composition.frameCount)</IntrinsicDuration>
+                  <EntryPoint>0</EntryPoint>
+                  <Duration>\(composition.frameCount)</Duration>
+                </MainSound>
+        """
+        }
+
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <CompositionPlaylist xmlns="http://www.smpte-ra.org/schemas/429-7/2006/CPL">
+          <Id>urn:uuid:\(uuidString(composition.cplUUID))</Id>
+          <AnnotationText>\(xmlEscape(composition.contentTitle))</AnnotationText>
+          <IssueDate>\(issueDate)</IssueDate>
+          <Issuer>\(xmlEscape(issuer))</Issuer>
+          <Creator>\(xmlEscape(creator))</Creator>
+          <ContentTitleText>\(xmlEscape(composition.dcncName))</ContentTitleText>
+          <ContentKind>\(composition.contentKind)</ContentKind>
+          <ContentVersion>
+            <Id>urn:uuid:\(uuidString(composition.contentVersionUUID))</Id>
+            <LabelText>\(xmlEscape(composition.dcncName))_version-1</LabelText>
+          </ContentVersion>
+          <RatingList/>
+          <ReelList>
+            <Reel>
+              <Id>urn:uuid:\(uuidString(composition.reelUUID))</Id>
+              <AssetList>
+        \(reelAssets)
+              </AssetList>
+            </Reel>
+          </ReelList>
+        </CompositionPlaylist>
+        """
     }
 
     /// Digital-cinema-naming-convention-style folder name, e.g.

@@ -11,16 +11,21 @@ import TranscodeKit
 /// - Mono/stereo sources land in L/R with digital silence elsewhere
 ///   (the 5.1 padding cinema servers expect).
 ///
-/// 23.976 fps sources are conformed to 24 fps by resampling the audio 0.1%
-/// shorter (the standard pull-up): the decoded 48 kHz stream is relabeled
-/// 48048 Hz and converted back to 48 kHz.
+/// Samples per edit unit follow the edit rate (2000 @ 24, 1920 @ 25,
+/// 1600 @ 30). Fractional source rates (23.976 → 24, 29.97 → 30) are
+/// conformed by resampling the audio 0.1% shorter (the standard pull-up):
+/// the decoded 48 kHz stream is relabeled 48048 Hz and converted back to
+/// 48 kHz.
 public final class AudioConformer {
     public static let channelCount = 6
     public static let sampleRate = 48_000
     public static let bytesPerSample = 3
-    /// 48000 / 24 fps.
-    public static let samplesPerFrame = 2_000
-    public static let bytesPerFrame = samplesPerFrame * channelCount * bytesPerSample
+
+    /// Audio samples per picture frame — depends on the edit rate
+    /// (2000 @ 24, 1920 @ 25, 1600 @ 30).
+    public let samplesPerFrame: Int
+    /// One edit unit: samplesPerFrame × 6 channels × 3 bytes.
+    public var bytesPerFrame: Int { samplesPerFrame * Self.channelCount * Self.bytesPerSample }
 
     /// Output slot order is SMPTE: L R C LFE Ls Rs. `map[slot]` = source
     /// channel index feeding that slot, nil = silence.
@@ -95,7 +100,8 @@ public final class AudioConformer {
     public var channelMappingDescription: String { channelMap.description }
     public var channelMappingVerified: Bool { channelMap.verified }
 
-    public init(source: ProbedSource, needsPullUp: Bool) throws {
+    public init(source: ProbedSource, editRate: EditRate, needsPullUp: Bool) throws {
+        samplesPerFrame = editRate.audioSamplesPerFrame
         channelMap = ChannelMap.make(sourceChannels: source.audioChannels,
                                      labels: source.audioChannelLabels)
         readChannels = source.audioChannels >= 6 ? 6 : 2
@@ -176,7 +182,7 @@ public final class AudioConformer {
     /// Returns the next edit-unit frame (`bytesPerFrame` bytes), padding the
     /// tail with silence. Call once per video frame.
     public func nextFrame() throws -> Data {
-        let needed = Self.samplesPerFrame * readChannels
+        let needed = samplesPerFrame * readChannels
         while pendingSamples.count < needed, !sourceExhausted {
             try readMore()
         }
@@ -277,10 +283,10 @@ public final class AudioConformer {
     func packFrame(sourceInterleaved: [Float]) -> Data {
         let channels = readChannels
         let slots = channelMap.slots
-        var frame = Data(count: Self.bytesPerFrame)
+        var frame = Data(count: bytesPerFrame)
         frame.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
             let bytes = raw.bindMemory(to: UInt8.self).baseAddress!
-            for sampleIndex in 0..<Self.samplesPerFrame {
+            for sampleIndex in 0..<samplesPerFrame {
                 let sourceBase = sampleIndex * channels
                 let destinationBase = sampleIndex * Self.channelCount * Self.bytesPerSample
                 for slot in 0..<Self.channelCount {

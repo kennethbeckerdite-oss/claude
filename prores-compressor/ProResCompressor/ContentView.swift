@@ -1,3 +1,4 @@
+import DCPKit
 import SwiftUI
 import TranscodeKit
 
@@ -79,8 +80,10 @@ struct ConfigureView: View {
         case .mp4:
             return true
         case .dcp:
-            // DCP is 24 fps only; 23.976 is conformed with a 0.1% speed-up.
-            return abs(source.frameRate - 24.0) < 0.01 || abs(source.frameRate - 23.976) < 0.01
+            // DCP supports 24/25/30 (incl. 23.976/29.97). Every composition
+            // in the package must qualify.
+            let allSources = [source] + appState.dcpExtraElements.map(\.source)
+            return allSources.allSatisfy { EditRate.isSupported(frameRate: $0.frameRate) }
         }
     }
 }

@@ -1,10 +1,13 @@
 import DCPKit
 import SwiftUI
 import TranscodeKit
+import UniformTypeIdentifiers
 
 struct DCPSettingsView: View {
     @Environment(AppState.self) private var appState
     let source: ProbedSource
+
+    @State private var showingElementPicker = false
 
     var body: some View {
         @Bindable var appState = appState
@@ -47,6 +50,8 @@ struct DCPSettingsView: View {
                 .multilineTextAlignment(.center)
             }
 
+            additionalVideos
+
             LabeledContent("Package name") {
                 Text(namePreview)
                     .font(.caption.monospaced())
@@ -56,8 +61,8 @@ struct DCPSettingsView: View {
                     .textSelection(.enabled)
             }
 
-            if !frameRateSupported {
-                Label("DCP requires a 24 or 23.976 fps source (this file is \(String(format: "%.3f", source.frameRate)) fps).",
+            if !frameRateSupported(source.frameRate) {
+                Label("DCP supports 24, 25, or 30 fps (this file is \(String(format: "%.3f", source.frameRate)) fps).",
                       systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
                     .font(.callout)
@@ -67,31 +72,89 @@ struct DCPSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .fileImporter(isPresented: $showingElementPicker,
+                      allowedContentTypes: [.movie, .quickTimeMovie, .mpeg4Movie]) { result in
+            if case .success(let url) = result {
+                appState.addDCPElement(url: url)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var additionalVideos: some View {
+        @Bindable var appState = appState
+        Divider()
+        HStack {
+            Text(appState.dcpExtraElements.isEmpty
+                 ? "Single composition"
+                 : "\(appState.dcpExtraElements.count + 1) compositions (one package)")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if appState.isAddingDCPElement {
+                ProgressView().controlSize(.small)
+            }
+            Button("Add video…") { showingElementPicker = true }
+                .disabled(appState.isAddingDCPElement)
+        }
+
+        if !appState.dcpExtraElements.isEmpty {
+            // Primary shown first for context, then the removable extras.
+            Text("1. \(appState.dcpContentTitle) — plays first")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(Array(appState.dcpExtraElements.enumerated()), id: \.element.id) { index, element in
+                HStack {
+                    Text("\(index + 2).")
+                        .foregroundStyle(.secondary)
+                    TextField("Title", text: Binding(
+                        get: { element.title },
+                        set: { appState.dcpExtraElements[index].title = $0 }))
+                    if !frameRateSupported(element.source.frameRate) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .help("\(String(format: "%.3f", element.source.frameRate)) fps is not a DCP rate")
+                    }
+                    Button {
+                        appState.removeDCPElement(id: element.id)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .font(.caption)
+            }
+        }
     }
 
     private var namePreview: String {
-        DCPPackage.folderName(
+        let fps = EditRate.forSource(frameRate: source.frameRate)?.rate.fps ?? 24
+        return DCPPackage.folderName(
             contentTitle: appState.dcpContentTitle.isEmpty
                 ? source.url.deletingPathExtension().lastPathComponent : appState.dcpContentTitle,
             container: appState.dcpContainer,
-            frameCount: max(1, Int((source.duration * 24).rounded())),
+            frameCount: max(1, Int((source.duration * Double(fps)).rounded())),
             hasAudio: source.hasAudio,
             options: appState.dcpDCNC)
     }
 
-    private var frameRateSupported: Bool {
-        abs(source.frameRate - 24.0) < 0.01 || abs(source.frameRate - 23.976) < 0.01
+    private func frameRateSupported(_ frameRate: Double) -> Bool {
+        EditRate.isSupported(frameRate: frameRate)
     }
 
     private var summary: String {
-        let mismatch = abs(source.frameRate - 23.976) < 0.01
+        let mapping = EditRate.forSource(frameRate: source.frameRate)
+        let fps = mapping?.rate.fps ?? 24
         let suggestion = DCPContainer.suggested(width: source.displayWidth, height: source.displayHeight)
-        var text = "SMPTE 2K 24 fps, unencrypted · 12-bit X'Y'Z' · 5.1-padded 24-bit/48 kHz audio."
-        if mismatch {
-            text += " 23.976 source will be conformed to 24 fps (0.1% speed-up)."
+        var text = "SMPTE 2K \(fps) fps, unencrypted · 12-bit X'Y'Z' · 5.1-padded 24-bit/48 kHz audio."
+        if mapping?.needsPullUp == true {
+            text += " Fractional source rate will be conformed with a 0.1% speed-up."
         }
         if suggestion != appState.dcpContainer {
             text += " Source aspect suggests \(suggestion.displayName)."
+        }
+        if !appState.dcpExtraElements.isEmpty {
+            text += " Each video becomes its own title in the package."
         }
         return text
     }

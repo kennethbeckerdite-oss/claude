@@ -39,12 +39,24 @@ final class AppState {
     var dcpContentTitle: String = ""
     var dcpDCNC = DCNCOptions()
 
+    /// Extra videos for a multi-composition DCP (each its own CPL/title). The
+    /// primary source in `configuring` is the first composition.
+    struct DCPElementItem: Identifiable {
+        let id = UUID()
+        var source: ProbedSource
+        var title: String
+    }
+    var dcpExtraElements: [DCPElementItem] = []
+    var isAddingDCPElement = false
+
     private var exportTask: Task<Void, Never>?
     private var sleepActivity: NSObjectProtocol?
 
     func load(url: URL) {
         guard !isExporting else { return }
         phase = .probing
+        // A fresh primary file starts a fresh package — drop any extras.
+        dcpExtraElements = []
         Task {
             do {
                 let source = try await SourceProbe.probe(url: url)
@@ -56,6 +68,26 @@ final class AppState {
                 phase = .failed(nil, error.localizedDescription)
             }
         }
+    }
+
+    /// Probes and appends an additional video to the DCP package.
+    func addDCPElement(url: URL) {
+        guard !isExporting, !isAddingDCPElement else { return }
+        isAddingDCPElement = true
+        Task {
+            defer { isAddingDCPElement = false }
+            do {
+                let source = try await SourceProbe.probe(url: url)
+                dcpExtraElements.append(DCPElementItem(
+                    source: source, title: url.deletingPathExtension().lastPathComponent))
+            } catch {
+                phase = .failed(nil, error.localizedDescription)
+            }
+        }
+    }
+
+    func removeDCPElement(id: DCPElementItem.ID) {
+        dcpExtraElements.removeAll { $0.id == id }
     }
 
     func startExport() {
@@ -77,12 +109,19 @@ final class AppState {
             }
             exporter = MP4Exporter(settings: settings)
         case .dcp:
+            let primaryTitle = dcpContentTitle.isEmpty
+                ? source.url.deletingPathExtension().lastPathComponent : dcpContentTitle
+            // Multi-composition only when extras exist; otherwise the single
+            // source flows through the Exporter protocol as today.
+            let elements: [DCPElement] = dcpExtraElements.isEmpty ? [] :
+                [DCPElement(source: source, title: primaryTitle)]
+                + dcpExtraElements.map { DCPElement(source: $0.source, title: $0.title) }
             exporter = DCPExporter(settings: DCPSettings(
-                contentTitle: dcpContentTitle.isEmpty
-                    ? source.url.deletingPathExtension().lastPathComponent : dcpContentTitle,
+                contentTitle: primaryTitle,
                 container: dcpContainer,
                 j2kBitsPerSecond: Int(dcpBitrateMbps * 1_000_000),
-                dcnc: dcpDCNC))
+                dcnc: dcpDCNC,
+                elements: elements))
         }
 
         progress = nil

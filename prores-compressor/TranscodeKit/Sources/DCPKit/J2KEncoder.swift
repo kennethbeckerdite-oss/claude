@@ -16,20 +16,24 @@ public final class J2KEncoder: Sendable {
     public let maxFrameBytes: Int
     private let maxComponentBytes: Int
 
-    /// DCI hard ceilings for 2K @ 24 fps (ISO 15444-1 AMD1).
-    private static let dciMaxFrameBytes = Int(OPJ_CINEMA_24_CS)
-    private static let dciMaxComponentBytes = Int(OPJ_CINEMA_24_COMP)
+    /// DCI hard ceilings for 2K @ 24 fps (ISO 15444-1 AMD1). The DCI limit is
+    /// a *bitrate* (≤250 Mb/s), so the per-frame ceiling scales with fps —
+    /// these 24 fps constants are multiplied by 24/fps below.
+    private static let dciMaxFrameBytes24 = Int(OPJ_CINEMA_24_CS)
+    private static let dciMaxComponentBytes24 = Int(OPJ_CINEMA_24_COMP)
 
     public init(width: Int, height: Int, bitsPerSecond: Int, frameRate: Int = 24) {
         self.width = width
         self.height = height
+        let dciMaxFrameBytes = Self.dciMaxFrameBytes24 * 24 / frameRate
+        let dciMaxComponentBytes = Self.dciMaxComponentBytes24 * 24 / frameRate
         let requested = bitsPerSecond / 8 / frameRate
-        let frameBytes = min(requested, Self.dciMaxFrameBytes)
+        let frameBytes = min(requested, dciMaxFrameBytes)
         maxFrameBytes = max(frameBytes, 50_000)
         // Keep the per-component cap in the same proportion DCI uses at the ceiling.
-        maxComponentBytes = min(Self.dciMaxComponentBytes,
-                                Int(Double(maxFrameBytes) * Double(Self.dciMaxComponentBytes)
-                                    / Double(Self.dciMaxFrameBytes)))
+        maxComponentBytes = min(dciMaxComponentBytes,
+                                Int(Double(maxFrameBytes) * Double(dciMaxComponentBytes)
+                                    / Double(dciMaxFrameBytes)))
     }
 
     /// Encodes one frame from three dense 12-bit X'Y'Z' planes.
