@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 import CoreMedia
 import Foundation
@@ -36,12 +37,17 @@ public enum SourceProbe {
 
         var audioChannels = 0
         var audioSampleRate = 0.0
+        var audioChannelLabels: [UInt32] = []
         if let audioTrack = tracks.first(where: { $0.mediaType == .audio }) {
             let audioFormats = try await audioTrack.load(.formatDescriptions)
             if let audioFormat = audioFormats.first,
                let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(audioFormat)?.pointee {
                 audioChannels = Int(asbd.mChannelsPerFrame)
                 audioSampleRate = asbd.mSampleRate
+                var layoutSize = 0
+                if let layout = CMAudioFormatDescriptionGetChannelLayout(audioFormat, sizeOut: &layoutSize) {
+                    audioChannelLabels = Self.channelLabels(from: layout)
+                }
             }
         }
 
@@ -65,8 +71,55 @@ public enum SourceProbe {
             colorYCbCrMatrix: Self.extensionString(format, kCMFormatDescriptionExtension_YCbCrMatrix),
             hasAudio: audioChannels > 0,
             audioChannels: audioChannels,
-            audioSampleRate: audioSampleRate
+            audioSampleRate: audioSampleRate,
+            audioChannelLabels: audioChannelLabels
         )
+    }
+
+    /// Per-channel AudioChannelLabels in stored order, expanding layout tags
+    /// and bitmaps via AudioToolbox. Empty when the layout can't be resolved.
+    private static func channelLabels(from layout: UnsafePointer<AudioChannelLayout>) -> [UInt32] {
+        let tag = layout.pointee.mChannelLayoutTag
+
+        if tag == kAudioChannelLayoutTag_UseChannelDescriptions {
+            let count = Int(layout.pointee.mNumberChannelDescriptions)
+            guard count > 0 else { return [] }
+            // mChannelDescriptions is a C flexible array member.
+            let raw = UnsafeRawPointer(layout)
+                + MemoryLayout<AudioChannelLayout>.offset(of: \.mChannelDescriptions)!
+            let descriptions = raw.assumingMemoryBound(to: AudioChannelDescription.self)
+            return (0..<count).map { descriptions[$0].mChannelLabel }
+        }
+
+        // Tag or bitmap: ask AudioToolbox to expand into descriptions.
+        let property: AudioFormatPropertyID
+        var specifier: UInt32
+        if tag == kAudioChannelLayoutTag_UseChannelBitmap {
+            property = kAudioFormatProperty_ChannelLayoutForBitmap
+            specifier = layout.pointee.mChannelBitmap.rawValue
+        } else {
+            property = kAudioFormatProperty_ChannelLayoutForTag
+            specifier = tag
+        }
+
+        var expandedSize: UInt32 = 0
+        guard AudioFormatGetPropertyInfo(property, UInt32(MemoryLayout<UInt32>.size),
+                                         &specifier, &expandedSize) == noErr,
+              expandedSize > 0 else { return [] }
+
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: Int(expandedSize),
+                                                      alignment: MemoryLayout<AudioChannelLayout>.alignment)
+        defer { buffer.deallocate() }
+        guard AudioFormatGetProperty(property, UInt32(MemoryLayout<UInt32>.size),
+                                     &specifier, &expandedSize, buffer) == noErr else { return [] }
+
+        let expanded = buffer.assumingMemoryBound(to: AudioChannelLayout.self)
+        let count = Int(expanded.pointee.mNumberChannelDescriptions)
+        guard count > 0 else { return [] }
+        let raw = UnsafeRawPointer(expanded)
+            + MemoryLayout<AudioChannelLayout>.offset(of: \.mChannelDescriptions)!
+        let descriptions = raw.assumingMemoryBound(to: AudioChannelDescription.self)
+        return (0..<count).map { descriptions[$0].mChannelLabel }
     }
 
     private static let proResCodecs: [CMVideoCodecType: String] = [

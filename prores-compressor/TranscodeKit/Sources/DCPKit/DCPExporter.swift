@@ -81,16 +81,17 @@ public final class DCPExporter: Exporter {
         }
 
         // --- Audio ---
+        var audioQC: AudioQC?
         if let soundURL, let soundUUID {
             onProgress(ExportProgress(fraction: 0.93, eta: nil, phase: "Writing audio"))
-            try writeAudio(source: source, to: soundURL, assetUUID: soundUUID,
-                           frameCount: frameCount, needsPullUp: needsPullUp)
+            audioQC = try writeAudio(source: source, to: soundURL, assetUUID: soundUUID,
+                                     frameCount: frameCount, needsPullUp: needsPullUp)
         }
         try Task.checkCancellation()
 
         // --- Packaging ---
         onProgress(ExportProgress(fraction: 0.97, eta: nil, phase: "Packaging"))
-        _ = try DCPPackage.write(DCPPackage.Input(
+        let packageOutput = try DCPPackage.write(DCPPackage.Input(
             folderURL: folderURL,
             contentTitle: settings.contentTitle,
             contentKind: settings.dcnc.resolvedKind(frameCount: frameCount).contentKind,
@@ -108,13 +109,63 @@ public final class DCPExporter: Exporter {
 
         // --- Self-validation (never skipped) ---
         onProgress(ExportProgress(fraction: 0.99, eta: nil, phase: "Verifying"))
-        try DCPValidator.validate(folderURL: folderURL,
-                                  expectedContainer: container,
-                                  expectSound: soundUUID != nil)
+        let validation = try DCPValidator.validate(folderURL: folderURL,
+                                                   expectedContainer: container,
+                                                   expectSound: soundUUID != nil)
 
         let totalBytes = Self.folderBytes(folderURL)
+        let qcURL = writeQCReport(source: source, folderURL: folderURL, frameCount: frameCount,
+                                  totalBytes: totalBytes, audioQC: audioQC,
+                                  assetHashes: packageOutput.assetHashes, validation: validation)
         onProgress(ExportProgress(fraction: 1, eta: 0, phase: "Done"))
-        return ExportResult(outputURL: folderURL, outputBytes: totalBytes)
+        return ExportResult(outputURL: folderURL, outputBytes: totalBytes, qcReportURL: qcURL)
+    }
+
+    private struct AudioQC {
+        let peakDBFS: Double?
+        let mappingDescription: String
+        let mappingVerified: Bool
+    }
+
+    private func writeQCReport(source: ProbedSource, folderURL: URL, frameCount: Int,
+                               totalBytes: Int64, audioQC: AudioQC?,
+                               assetHashes: [(name: String, sha1: String)],
+                               validation: DCPValidator.Report) -> URL? {
+        let folderName = folderURL.lastPathComponent
+        var report = QCReport(title: "QC Report — \(folderName)")
+        report.sections.append(QCReport.sourceSection(source))
+
+        report.add("Output (DCP)", [
+            "Package: \(folderName)",
+            "Standard: SMPTE, unencrypted, 2K",
+            "Container: \(settings.container.displayName)",
+            "Frames: \(frameCount) @ 24 fps (\(String(format: "%.2f", Double(frameCount) / 24.0)) s)",
+            String(format: "JPEG 2000 bitrate cap: %.0f Mb/s", Double(settings.j2kBitsPerSecond) / 1_000_000),
+            "Total size: \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))",
+        ])
+
+        if let audioQC {
+            var lines = [
+                "Format: 6-channel (L R C LFE Ls Rs), 24-bit, 48 kHz",
+                "Mapping: \(audioQC.mappingDescription)",
+                "Peak: \(QCReport.formatPeak(dbfs: audioQC.peakDBFS))",
+            ]
+            if !audioQC.mappingVerified {
+                lines.append("⚠️ Channel order was not verifiable from the source — listen to a surround check before screening.")
+            }
+            report.add("Audio", lines)
+        } else {
+            report.add("Audio", ["None (MOS)"])
+        }
+
+        var integrity = assetHashes.map { "\($0.name)  SHA-1 \($0.sha1)" }
+        integrity.append("Validation: PASSED — \(validation.checkedAssets) assets hash-verified, \(validation.frameCount) frames cross-checked")
+        report.add("Integrity", integrity)
+
+        // Next to the folder, never inside it (would be a foreign asset).
+        let qcURL = folderURL.deletingLastPathComponent()
+            .appendingPathComponent("\(folderName)_QC.txt")
+        return report.write(to: qcURL)
     }
 
     // MARK: - Picture
@@ -235,7 +286,7 @@ public final class DCPExporter: Exporter {
     // MARK: - Audio
 
     private func writeAudio(source: ProbedSource, to soundURL: URL, assetUUID: UUID,
-                            frameCount: Int, needsPullUp: Bool) throws {
+                            frameCount: Int, needsPullUp: Bool) throws -> AudioQC {
         let conformer = try AudioConformer(source: source, needsPullUp: needsPullUp)
         let writer = try PCMMXFWriter(url: soundURL, assetUUID: assetUUID,
                                       channelCount: AudioConformer.channelCount,
@@ -251,6 +302,9 @@ public final class DCPExporter: Exporter {
             try writer.write(frame: try conformer.nextFrame())
         }
         try writer.finish()
+        return AudioQC(peakDBFS: conformer.peakDBFS,
+                       mappingDescription: conformer.channelMappingDescription,
+                       mappingVerified: conformer.channelMappingVerified)
     }
 
     // MARK: - Helpers

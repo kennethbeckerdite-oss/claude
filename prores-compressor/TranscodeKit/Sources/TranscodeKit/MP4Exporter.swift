@@ -44,6 +44,15 @@ public struct MP4Settings: Sendable, Equatable {
         audioBitsPerSecond: 160_000,
         maxWidth: 1920,
         maxHeight: 1080)
+
+    /// Festival submission preset: "2 GB or under" with headroom for upload
+    /// size checks, H.264 so any screener laptop/TV plays it, capped at 1080p.
+    public static let festivalShort = MP4Settings(
+        rateControl: .targetSize(bytes: 1_900_000_000),
+        codec: .h264,
+        audioBitsPerSecond: 160_000,
+        maxWidth: 1920,
+        maxHeight: 1080)
 }
 
 public final class MP4Exporter: Exporter {
@@ -72,8 +81,11 @@ public final class MP4Exporter: Exporter {
 /// cancellation handler; all mutable state is guarded by `lock`.
 private final class MP4ExportSession: @unchecked Sendable {
     private let source: ProbedSource
+    private let settings: MP4Settings
     private let onProgress: @Sendable (ExportProgress) -> Void
     private let outputURL: URL
+    private let videoBitrate: Int
+    private let outputSize: (width: Int, height: Int)
 
     private let reader: AVAssetReader
     private let writer: AVAssetWriter
@@ -87,10 +99,12 @@ private final class MP4ExportSession: @unchecked Sendable {
     private var pendingInputs = 0
     private var cancelled = false
     private var startedAt = Date()
+    private var audioPeak: Float = 0
 
     init(source: ProbedSource, settings: MP4Settings, outputURL: URL,
          onProgress: @escaping @Sendable (ExportProgress) -> Void) throws {
         self.source = source
+        self.settings = settings
         self.onProgress = onProgress
         self.outputURL = outputURL
 
@@ -118,7 +132,6 @@ private final class MP4ExportSession: @unchecked Sendable {
         ])
         videoOutput.alwaysCopiesSampleData = false
 
-        let videoBitrate: Int
         switch settings.rateControl {
         case .targetSize(let bytes):
             videoBitrate = BitrateCalculator.videoBitsPerSecond(
@@ -131,8 +144,8 @@ private final class MP4ExportSession: @unchecked Sendable {
 
         // Natural (PAR-corrected) size, not coded size — anamorphic sources
         // export squeezed otherwise. Optionally fitted into the preset bounds.
-        let outputSize = RenderSize.fit(width: source.naturalWidth, height: source.naturalHeight,
-                                        maxWidth: settings.maxWidth, maxHeight: settings.maxHeight)
+        outputSize = RenderSize.fit(width: source.naturalWidth, height: source.naturalHeight,
+                                    maxWidth: settings.maxWidth, maxHeight: settings.maxHeight)
 
         let frameRate = source.frameRate > 0 ? source.frameRate : 24
         var compression: [String: Any] = [
@@ -285,6 +298,8 @@ private final class MP4ExportSession: @unchecked Sendable {
                 }
                 if reportsProgress {
                     self.reportProgress(at: CMSampleBufferGetPresentationTimeStamp(sample))
+                } else {
+                    self.trackAudioPeak(in: sample)
                 }
             }
         }
@@ -298,6 +313,28 @@ private final class MP4ExportSession: @unchecked Sendable {
         lock.unlock()
         let eta: TimeInterval? = fraction > 0.02 ? elapsed * (1 - fraction) / fraction : nil
         onProgress(ExportProgress(fraction: fraction, eta: eta, phase: "Encoding video"))
+    }
+
+    /// Reader delivers float32 interleaved PCM (per outputSettings), so a
+    /// straight scan over the block buffer gives the sample peak.
+    private func trackAudioPeak(in sample: CMSampleBuffer) {
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sample) else { return }
+        var length = 0
+        var pointer: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
+                                          totalLengthOut: &length,
+                                          dataPointerOut: &pointer) == kCMBlockBufferNoErr,
+              let pointer, length >= MemoryLayout<Float>.size else { return }
+        var peak: Float = 0
+        pointer.withMemoryRebound(to: Float.self, capacity: length / MemoryLayout<Float>.size) { floats in
+            for index in 0..<(length / MemoryLayout<Float>.size) {
+                let magnitude = abs(floats[index])
+                if magnitude > peak { peak = magnitude }
+            }
+        }
+        lock.lock()
+        if peak > audioPeak { audioPeak = peak }
+        lock.unlock()
     }
 
     private func inputFinished() {
@@ -323,13 +360,48 @@ private final class MP4ExportSession: @unchecked Sendable {
             case .completed:
                 let bytes = (try? self.outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize)
                     .flatMap { Int64($0) } ?? 0
+                let qcURL = self.writeQCReport(outputBytes: bytes)
                 self.onProgress(ExportProgress(fraction: 1, eta: 0, phase: "Done"))
-                self.finish(.success(ExportResult(outputURL: self.outputURL, outputBytes: bytes)))
+                self.finish(.success(ExportResult(outputURL: self.outputURL, outputBytes: bytes,
+                                                  qcReportURL: qcURL)))
             default:
                 let message = self.writer.error?.localizedDescription ?? "unknown"
                 self.finish(.failure(ExportError.writerFailed(message)))
             }
         }
+    }
+
+    private func writeQCReport(outputBytes: Int64) -> URL? {
+        var report = QCReport(title: "QC Report — \(outputURL.lastPathComponent)")
+        report.sections.append(QCReport.sourceSection(source))
+
+        var outputLines = [
+            "File: \(outputURL.lastPathComponent)",
+            "Container: MP4 (faststart)",
+            "Video: \(settings.codec.rawValue)"
+                + (settings.codec == .hevc && source.bitDepth >= 10 ? " Main10" : ""),
+            "Dimensions: \(outputSize.width)×\(outputSize.height)",
+            String(format: "Video bitrate: %.2f Mb/s average", Double(videoBitrate) / 1_000_000),
+            "Size: \(ByteCountFormatter.string(fromByteCount: outputBytes, countStyle: .file)) (\(outputBytes) bytes)",
+        ]
+        if case .targetSize(let target) = settings.rateControl {
+            outputLines.append("Target size: \(ByteCountFormatter.string(fromByteCount: target, countStyle: .file))"
+                + (outputBytes <= target ? " — met" : " — EXCEEDED, re-check"))
+        }
+        report.add("Output", outputLines)
+
+        if source.hasAudio {
+            lock.lock()
+            let peak = audioPeak
+            lock.unlock()
+            report.add("Audio", [
+                "AAC stereo \(settings.audioBitsPerSecond / 1000) kb/s",
+                "Peak: \(QCReport.formatPeak(dbfs: peak > 0 ? 20 * log10(Double(peak)) : nil))",
+            ])
+        }
+
+        let qcURL = outputURL.deletingPathExtension().appendingPathExtension("QC.txt")
+        return report.write(to: qcURL)
     }
 
     private func cancel() {

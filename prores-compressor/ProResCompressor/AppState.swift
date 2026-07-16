@@ -25,7 +25,8 @@ final class AppState {
 
     enum MP4Mode: String, CaseIterable {
         case targetSize = "Target size"
-        case smallHQ = "Small & HQ (1080p)"
+        case smallHQ = "Small & HQ"
+        case festivalShort = "Festival Short"
     }
 
     // Export configuration (persists across files within a session).
@@ -71,6 +72,8 @@ final class AppState {
                     codec: mp4Codec)
             case .smallHQ:
                 settings = .smallHQ
+            case .festivalShort:
+                settings = .festivalShort
             }
             exporter = MP4Exporter(settings: settings)
         case .dcp:

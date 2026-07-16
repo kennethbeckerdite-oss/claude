@@ -22,6 +22,10 @@ struct MP4SettingsView: View {
                 Text(smallHQSummary)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            case .festivalShort:
+                Text(festivalShortSummary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             case .targetSize:
                 targetSizeControls
             }
@@ -71,6 +75,15 @@ struct MP4SettingsView: View {
             safetyFactor: 1.0)
         let size = ByteCountFormatter.string(fromByteCount: estimatedBytes, countStyle: .file)
         return "H.264 High · 6 Mb/s · up to 1920×1080 (no upscaling) · AAC 160 kb/s stereo — about \(size) for this file. Ported from the HandBrake \"MP4 Small & HQ\" preset."
+    }
+
+    private var festivalShortSummary: String {
+        let bitrate = BitrateCalculator.videoBitsPerSecond(
+            targetBytes: 1_900_000_000,
+            durationSeconds: source.duration,
+            audioBitsPerSecond: source.hasAudio ? 160_000 : 0)
+        let mbps = Double(bitrate) / 1_000_000
+        return String(format: "Festival submission spec: lands under 2 GB (≈ %.1f Mb/s video) · H.264 for screener compatibility · up to 1920×1080 · AAC 160 kb/s stereo.", mbps)
     }
 
     private var bitrateSummary: String {

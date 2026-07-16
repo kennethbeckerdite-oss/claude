@@ -99,6 +99,9 @@ public enum DCPPackage {
         public let pklURL: URL
         public let assetMapURL: URL
         public let volIndexURL: URL
+        /// (filename, base64 SHA-1) as written into the PKL — reused by the
+        /// QC report so nothing gets hashed twice.
+        public let assetHashes: [(name: String, sha1: String)]
     }
 
     /// Writes CPL, PKL, ASSETMAP, VOLINDEX next to the track files.
@@ -183,9 +186,11 @@ public enum DCPPackage {
         pklAssetEntries.append((cplUUID, cplURL, "text/xml"))
 
         var pklAssets = ""
+        var assetHashes: [(name: String, sha1: String)] = []
         for entry in pklAssetEntries {
             let size = try fileSize(entry.url)
             let hash = try sha1Base64(of: entry.url)
+            assetHashes.append((entry.url.lastPathComponent, hash))
             pklAssets += """
             <Asset>
               <Id>urn:uuid:\(uuidString(entry.uuid))</Id>
@@ -273,7 +278,8 @@ public enum DCPPackage {
         try write(xml: volIndex, to: volIndexURL)
 
         return Output(cplURL: cplURL, pklURL: pklURL,
-                      assetMapURL: assetMapURL, volIndexURL: volIndexURL)
+                      assetMapURL: assetMapURL, volIndexURL: volIndexURL,
+                      assetHashes: assetHashes)
     }
 
     /// Digital-cinema-naming-convention-style folder name, e.g.

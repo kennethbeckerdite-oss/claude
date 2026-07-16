@@ -34,6 +34,9 @@ public struct ProbedSource: Sendable, Equatable {
     public let hasAudio: Bool
     public let audioChannels: Int
     public let audioSampleRate: Double
+    /// AudioChannelLabel raw values in stored channel order; empty when the
+    /// file carries no usable layout (mapping then falls back to stored order).
+    public let audioChannelLabels: [UInt32]
 
     /// `naturalWidth`/`naturalHeight` after applying any 90°/270° rotation —
     /// what the viewer actually sees; use for UI and aspect decisions.
@@ -57,7 +60,8 @@ public struct ProbedSource: Sendable, Equatable {
                 preferredTransform: CGAffineTransform,
                 frameRate: Double, bitDepth: Int,
                 colorPrimaries: String?, colorTransferFunction: String?, colorYCbCrMatrix: String?,
-                hasAudio: Bool, audioChannels: Int, audioSampleRate: Double) {
+                hasAudio: Bool, audioChannels: Int, audioSampleRate: Double,
+                audioChannelLabels: [UInt32] = []) {
         self.url = url
         self.fileSizeBytes = fileSizeBytes
         self.duration = duration
@@ -76,6 +80,7 @@ public struct ProbedSource: Sendable, Equatable {
         self.hasAudio = hasAudio
         self.audioChannels = audioChannels
         self.audioSampleRate = audioSampleRate
+        self.audioChannelLabels = audioChannelLabels
     }
 }
 
@@ -97,10 +102,13 @@ public struct ExportProgress: Sendable {
 public struct ExportResult: Sendable {
     public let outputURL: URL
     public let outputBytes: Int64
+    /// Plain-text QC report written next to the output (nil if writing failed).
+    public let qcReportURL: URL?
 
-    public init(outputURL: URL, outputBytes: Int64) {
+    public init(outputURL: URL, outputBytes: Int64, qcReportURL: URL? = nil) {
         self.outputURL = outputURL
         self.outputBytes = outputBytes
+        self.qcReportURL = qcReportURL
     }
 }
 

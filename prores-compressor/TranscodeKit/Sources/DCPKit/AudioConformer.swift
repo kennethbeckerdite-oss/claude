@@ -3,8 +3,13 @@ import Foundation
 import TranscodeKit
 
 /// Decodes the source audio into DCP edit-unit frames: 24-bit little-endian
-/// PCM, 48 kHz, 6 channels (L R C LFE Ls Rs) with source stereo in L/R and
-/// digital silence elsewhere — the 5.1 padding cinema servers expect.
+/// PCM, 48 kHz, 6 channels in SMPTE order (L R C LFE Ls Rs).
+///
+/// - Sources with ≥6 channels pass through as 5.1: channels are mapped into
+///   SMPTE order using the file's channel labels; if the file carries no
+///   usable layout the stored order is kept and flagged for the QC report.
+/// - Mono/stereo sources land in L/R with digital silence elsewhere
+///   (the 5.1 padding cinema servers expect).
 ///
 /// 23.976 fps sources are conformed to 24 fps by resampling the audio 0.1%
 /// shorter (the standard pull-up): the decoded 48 kHz stream is relabeled
@@ -17,16 +22,84 @@ public final class AudioConformer {
     public static let samplesPerFrame = 2_000
     public static let bytesPerFrame = samplesPerFrame * channelCount * bytesPerSample
 
+    /// Output slot order is SMPTE: L R C LFE Ls Rs. `map[slot]` = source
+    /// channel index feeding that slot, nil = silence.
+    struct ChannelMap {
+        let slots: [Int?]
+        let description: String
+        /// False when the source order had to be trusted blindly.
+        let verified: Bool
+
+        static func make(sourceChannels: Int, labels: [UInt32]) -> ChannelMap {
+            if sourceChannels < 6 {
+                return ChannelMap(
+                    slots: [0, sourceChannels >= 2 ? 1 : 0, nil, nil, nil, nil],
+                    description: sourceChannels >= 2
+                        ? "stereo source mapped to L/R, other channels silent"
+                        : "mono source duplicated to L/R, other channels silent",
+                    verified: true)
+            }
+
+            // AudioChannelLabel raw values (CoreAudioTypes):
+            // 1 Left, 2 Right, 3 Center, 4 LFEScreen,
+            // 5 LeftSurround, 6 RightSurround, 33/34 RearSurroundLeft/Right.
+            func find(_ candidates: [UInt32]) -> Int? {
+                for candidate in candidates {
+                    if let index = labels.firstIndex(of: candidate) {
+                        return index
+                    }
+                }
+                return nil
+            }
+
+            let resolved: [Int?] = [
+                find([1]),        // L
+                find([2]),        // R
+                find([3]),        // C
+                find([4]),        // LFE
+                find([5, 33]),    // Ls
+                find([6, 34]),    // Rs
+            ]
+
+            if labels.count >= 6, resolved.allSatisfy({ $0 != nil }) {
+                return ChannelMap(slots: resolved,
+                                  description: "5.1 source mapped by channel labels to L R C LFE Ls Rs",
+                                  verified: true)
+            }
+            return ChannelMap(slots: [0, 1, 2, 3, 4, 5],
+                              description: "6-channel source passed through in stored order (no usable channel labels — verify L R C LFE Ls Rs)",
+                              verified: false)
+        }
+    }
+
     private let reader: AVAssetReader?
     private let output: AVAssetReaderTrackOutput?
     private let converter: AVAudioConverter?
     private let converterOutputFormat: AVAudioFormat?
+    /// Channels delivered by the reader (2 or 6).
+    private let readChannels: Int
+    let channelMap: ChannelMap
 
-    /// Decoded-but-not-yet-framed interleaved stereo samples.
+    /// Decoded-but-not-yet-framed interleaved samples (readChannels per frame).
     private var pendingSamples: [Float] = []
     private var sourceExhausted: Bool
 
+    /// Loudest absolute sample seen across all source channels (0…1+).
+    public private(set) var peakSample: Float = 0
+
+    /// Sample peak in dBFS, nil until audio has been read (or if silent).
+    public var peakDBFS: Double? {
+        peakSample > 0 ? 20 * log10(Double(peakSample)) : nil
+    }
+
+    public var channelMappingDescription: String { channelMap.description }
+    public var channelMappingVerified: Bool { channelMap.verified }
+
     public init(source: ProbedSource, needsPullUp: Bool) throws {
+        channelMap = ChannelMap.make(sourceChannels: source.audioChannels,
+                                     labels: source.audioChannelLabels)
+        readChannels = source.audioChannels >= 6 ? 6 : 2
+
         guard source.hasAudio else {
             reader = nil
             output = nil
@@ -55,11 +128,11 @@ public final class AudioConformer {
             AVLinearPCMIsNonInterleaved: false,
             AVLinearPCMIsBigEndianKey: false,
             AVSampleRateKey: Self.sampleRate,
-            AVNumberOfChannelsKey: 2,
+            AVNumberOfChannelsKey: readChannels,
         ])
         trackOutput.alwaysCopiesSampleData = false
         guard assetReader.canAdd(trackOutput) else {
-            throw ExportError.readerFailed("cannot convert the audio track to 48 kHz stereo PCM")
+            throw ExportError.readerFailed("cannot convert the audio track to 48 kHz \(readChannels)-channel PCM")
         }
         assetReader.add(trackOutput)
         guard assetReader.startReading() else {
@@ -69,11 +142,9 @@ public final class AudioConformer {
         if needsPullUp {
             // Relabel 48000 → 48048 on input so the converter removes one
             // sample per thousand (the 1000/1001 conform).
-            guard let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                                  sampleRate: 48_048, channels: 2, interleaved: true),
-                  let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                                   sampleRate: Double(Self.sampleRate),
-                                                   channels: 2, interleaved: true),
+            guard let inputFormat = Self.interleavedFloatFormat(sampleRate: 48_048, channels: readChannels),
+                  let outputFormat = Self.interleavedFloatFormat(sampleRate: Double(Self.sampleRate),
+                                                                 channels: readChannels),
                   let audioConverter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
                 throw ExportError.unsupportedSource("cannot build the 23.976→24 audio conform converter")
             }
@@ -89,23 +160,35 @@ public final class AudioConformer {
         sourceExhausted = false
     }
 
+    /// AVAudioFormat needs an explicit channel layout above 2 channels.
+    private static func interleavedFloatFormat(sampleRate: Double, channels: Int) -> AVAudioFormat? {
+        if channels <= 2 {
+            return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                 channels: AVAudioChannelCount(channels), interleaved: true)
+        }
+        guard let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A) else {
+            return nil
+        }
+        return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                             interleaved: true, channelLayout: layout)
+    }
+
     /// Returns the next edit-unit frame (`bytesPerFrame` bytes), padding the
-    /// tail with silence so exactly `remainingFrames` more frames can always
-    /// be produced. Call once per video frame.
+    /// tail with silence. Call once per video frame.
     public func nextFrame() throws -> Data {
-        while pendingSamples.count < Self.samplesPerFrame * 2, !sourceExhausted {
+        let needed = Self.samplesPerFrame * readChannels
+        while pendingSamples.count < needed, !sourceExhausted {
             try readMore()
         }
 
-        let stereoCount = Self.samplesPerFrame * 2
-        var stereo = [Float](repeating: 0, count: stereoCount)
-        let available = min(stereoCount, pendingSamples.count)
+        var sourceFrame = [Float](repeating: 0, count: needed)
+        let available = min(needed, pendingSamples.count)
         if available > 0 {
-            stereo.replaceSubrange(0..<available, with: pendingSamples[0..<available])
+            sourceFrame.replaceSubrange(0..<available, with: pendingSamples[0..<available])
             pendingSamples.removeFirst(available)
         }
 
-        return Self.packFrame(stereo: stereo)
+        return packFrame(sourceInterleaved: sourceFrame)
     }
 
     private func readMore() throws {
@@ -126,17 +209,28 @@ public final class AudioConformer {
         if converter != nil {
             try convert(samples)
         } else {
-            pendingSamples.append(contentsOf: samples)
+            appendPending(samples)
+        }
+    }
+
+    private func appendPending<S: Sequence>(_ samples: S) where S.Element == Float {
+        for sample in samples {
+            let magnitude = abs(sample)
+            if magnitude > peakSample {
+                peakSample = magnitude
+            }
+            pendingSamples.append(sample)
         }
     }
 
     private func convert(_ samples: [Float], drain: Bool = false) throws {
         guard let converter, let outputFormat = converterOutputFormat else { return }
         let inputFormat = converter.inputFormat
+        let channels = readChannels
 
         var inputBuffer: AVAudioPCMBuffer?
         if !samples.isEmpty {
-            let frameCount = AVAudioFrameCount(samples.count / 2)
+            let frameCount = AVAudioFrameCount(samples.count / channels)
             guard let buffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: frameCount) else {
                 throw ExportError.encodingFailed("audio buffer allocation failed")
             }
@@ -147,7 +241,7 @@ public final class AudioConformer {
             inputBuffer = buffer
         }
 
-        let outputCapacity = AVAudioFrameCount(max(1024, samples.count / 2 + 64))
+        let outputCapacity = AVAudioFrameCount(max(1024, samples.count / channels + 64))
         guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputCapacity) else {
             throw ExportError.encodingFailed("audio buffer allocation failed")
         }
@@ -167,9 +261,9 @@ public final class AudioConformer {
             throw ExportError.encodingFailed(conversionError?.localizedDescription ?? "audio conform failed")
         }
 
-        let produced = Int(outputBuffer.frameLength) * 2
+        let produced = Int(outputBuffer.frameLength) * channels
         if produced > 0, let channel = outputBuffer.floatChannelData?[0] {
-            pendingSamples.append(contentsOf: UnsafeBufferPointer(start: channel, count: produced))
+            appendPending(UnsafeBufferPointer(start: channel, count: produced))
         }
     }
 
@@ -178,18 +272,22 @@ public final class AudioConformer {
         try convert([], drain: true)
     }
 
-    /// Interleaved stereo float → one 6-channel 24-bit LE edit unit.
-    static func packFrame(stereo: [Float]) -> Data {
-        var frame = Data(count: bytesPerFrame)
+    /// Interleaved source floats (readChannels per sample frame) → one
+    /// 6-channel 24-bit LE edit unit in SMPTE slot order.
+    func packFrame(sourceInterleaved: [Float]) -> Data {
+        let channels = readChannels
+        let slots = channelMap.slots
+        var frame = Data(count: Self.bytesPerFrame)
         frame.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
             let bytes = raw.bindMemory(to: UInt8.self).baseAddress!
-            for sampleIndex in 0..<samplesPerFrame {
-                let left = quantize24(stereo[sampleIndex * 2])
-                let right = quantize24(stereo[sampleIndex * 2 + 1])
-                let base = sampleIndex * channelCount * bytesPerSample
-                writeSample(left, to: bytes + base)
-                writeSample(right, to: bytes + base + bytesPerSample)
-                // Channels 3–6 (C, LFE, Ls, Rs) stay zero — digital silence.
+            for sampleIndex in 0..<Self.samplesPerFrame {
+                let sourceBase = sampleIndex * channels
+                let destinationBase = sampleIndex * Self.channelCount * Self.bytesPerSample
+                for slot in 0..<Self.channelCount {
+                    guard let sourceChannel = slots[slot], sourceChannel < channels else { continue }
+                    let value = Self.quantize24(sourceInterleaved[sourceBase + sourceChannel])
+                    Self.writeSample(value, to: bytes + destinationBase + slot * Self.bytesPerSample)
+                }
             }
         }
         return frame
