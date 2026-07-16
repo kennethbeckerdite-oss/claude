@@ -18,12 +18,23 @@ Personal-use build: App Sandbox off, ad-hoc signing.
 - Anamorphic/PAR sources handled via track `naturalSize`; rotation metadata passes through on MP4 and is rejected for DCP.
 - Exporter strips macOS `._*` AppleDouble files on non-APFS volumes; users must `dot_clean -m` after Finder-copying a DCP to another non-APFS drive.
 
-## TODO / next steps
+## TODO / next steps (festival-readiness roadmap, approved by Kenneth)
 
-- [ ] **DMG distribution**: `make-dmg` script that builds Release, signs, and packages a shareable DMG. Free tier = ad-hoc signing (recipients right-click → Open); proper tier = Developer ID cert ($99/yr) + `notarytool` notarization + staple, then it opens cleanly on any Mac. No code changes required — no sandbox or private APIs in use.
-- [ ] Batch queue (HandBrake-style, multiple files with per-file settings).
+Priority batch (roughly a session's worth):
+- [ ] **"Festival Short" MP4 preset**: hard cap ~1.9 GB (festivals ask "2 GB or under"; leave upload headroom), H.264 for screener compatibility. Reuses target-size rate control + preset row.
+- [ ] **True 5.1 DCP audio passthrough**: 6-channel sources currently get downmixed to stereo + silence padding — a paid 5.1 mix is lost silently. Detect ≥6ch and map L R C LFE Ls Rs through `AudioConformer`.
+- [ ] **QC report per export**: text file next to output — duration, specs, audio peaks, checksums, validator results. Data already exists in probe/validator.
+
+Next:
+- [ ] **25/30 fps DCP support**: SMPTE allows 24/25/30; app currently rejects non-24. Edit rate is already parameterized through MXF/CPL — relax the gate, adjust audio samples-per-frame (48000/25=1920, 48000/30=1600) and bitrate caps per rate.
+- [ ] **Multi-reel DCP** (Kenneth's back-to-back request): several videos in ONE composition — CPL with N reels, each reel its own picture/sound MXF pair; servers play them seamlessly. UI = ordered file list. CPL generator already emits a reel list with one entry.
+- [ ] **Batch queue** (HandBrake-style): multiple files/settings; the key pairing is MP4 screener + DCP from the same master in one run.
+- [ ] **Loudness measurement** (LUFS now, Leq(m) later): warn, don't auto-correct — catches web-hot mixes before a theater screening.
+- [ ] **Burned-in subtitles from SRT** (MP4 first; DCP timed-text is a much bigger lift).
+- [ ] **Package-for-upload**: zip the DCP folder (single archive, AppleDouble-free) for festivals taking uploads.
+- [ ] **DMG distribution**: `make-dmg` script that builds Release, signs, and packages a shareable DMG. Free tier = ad-hoc signing (right-click → Open); proper tier = Developer ID cert ($99/yr) + `notarytool` + staple. No code changes needed — no sandbox or private APIs in use.
 - [ ] Software x264-quality option if hardware H.264 at 6 Mb/s underperforms the HandBrake original.
-- [ ] 4K DCP, encrypted (KDM) DCPs, subtitles/multi-reel — deliberately out of v1.
+- [ ] 4K DCP, encrypted (KDM) DCPs — deliberately deferred.
 - [ ] Real cinema-server ingest test before any actual screening.
 
 ## Build & Test
