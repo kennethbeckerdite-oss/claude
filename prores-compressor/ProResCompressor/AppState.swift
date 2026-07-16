@@ -34,6 +34,8 @@ final class AppState {
     var mp4Mode: MP4Mode = .targetSize
     var targetGigabytes: Double = 3.0
     var mp4Codec: MP4Settings.Codec = .hevc
+    /// Optional .srt to burn into the MP4 picture.
+    var mp4SubtitleURL: URL?
     var dcpContainer: DCPContainer = .flat
     var dcpBitrateMbps: Double = 125
     var dcpContentTitle: String = ""
@@ -55,8 +57,9 @@ final class AppState {
     func load(url: URL) {
         guard !isExporting else { return }
         phase = .probing
-        // A fresh primary file starts a fresh package — drop any extras.
+        // A fresh primary file starts fresh — drop extras and any prior SRT.
         dcpExtraElements = []
+        mp4SubtitleURL = nil
         Task {
             do {
                 let source = try await SourceProbe.probe(url: url)
@@ -96,7 +99,7 @@ final class AppState {
         let exporter: any Exporter
         switch format {
         case .mp4:
-            let settings: MP4Settings
+            var settings: MP4Settings
             switch mp4Mode {
             case .targetSize:
                 settings = MP4Settings(
@@ -107,6 +110,7 @@ final class AppState {
             case .festivalShort:
                 settings = .festivalShort
             }
+            settings.subtitleURL = mp4SubtitleURL
             exporter = MP4Exporter(settings: settings)
         case .dcp:
             let primaryTitle = dcpContentTitle.isEmpty

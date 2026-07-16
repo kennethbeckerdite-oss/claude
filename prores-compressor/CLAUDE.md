@@ -30,16 +30,17 @@ Done in v2 workstream B (needs Kenneth's build verification):
 - [x] **25/30 fps DCP support** (+ 23.976/29.97 conform) — new `EditRate` type threads fps through `AudioConformer` (instance samples/frame), `J2KEncoder` (fps-scaled DCI ceiling), `DCPPackage` CPL EditRate/FrameRate, and `DCPValidator` (reads each CPL's own rate).
 - [x] **Multi-composition packages** — `DCPPackage.writePackage([Composition])` emits one CPL per video, one shared PKL/ASSETMAP/VOLINDEX. `DCPExporter` loops per `DCPElement`; DCP settings pane has an "Add video…" list. Each video = its own title on the cinema server.
 
-Next (workstream C — audio confidence + subtitles):
-- [ ] **25/30 fps DCP support**: SMPTE allows 24/25/30; app currently rejects non-24. Edit rate is already parameterized through MXF/CPL — relax the gate, adjust audio samples-per-frame (48000/25=1920, 48000/30=1600) and bitrate caps per rate.
-- [ ] **Multi-reel DCP** (Kenneth's back-to-back request): several videos in ONE composition — CPL with N reels, each reel its own picture/sound MXF pair; servers play them seamlessly. UI = ordered file list. CPL generator already emits a reel list with one entry.
-- [ ] **Batch queue** (HandBrake-style): multiple files/settings; the key pairing is MP4 screener + DCP from the same master in one run.
-- [ ] **Loudness measurement** (LUFS now, Leq(m) later): warn, don't auto-correct — catches web-hot mixes before a theater screening.
-- [ ] **Burned-in subtitles from SRT** (MP4 first; DCP timed-text is a much bigger lift).
-- [ ] **Package-for-upload**: zip the DCP folder (single archive, AppleDouble-free) for festivals taking uploads.
-- [ ] **DMG distribution**: `make-dmg` script that builds Release, signs, and packages a shareable DMG. Free tier = ad-hoc signing (right-click → Open); proper tier = Developer ID cert ($99/yr) + `notarytool` + staple. No code changes needed — no sandbox or private APIs in use.
+Done in v2 workstream C (needs Kenneth's build verification):
+- [x] **Loudness metering** — `LoudnessMeter` (BS.1770-4 integrated LUFS, K-weighting + gating). DCP meters the delivered 6-channel program; MP4 meters the source. QC report gains an advisory Loudness line (warns when a DCP sits near web levels). Warn-only, never alters audio.
+- [x] **Burned-in subtitles from SRT** (MP4) — `SRTParser` + `SubtitleRenderer` (CoreText, white/black-outline, bottom-centered). When an .srt is chosen, MP4 export switches to an 8-bit BGRA draw-and-encode path via `AVAssetWriterInputPixelBufferAdaptor`; passthrough is untouched when there's no SRT. UI: "Burn subtitles…" row.
+
+Next (workstream D — throughput + distribution):
+- [ ] **Batch queue** (HandBrake-style): multiple files/settings run sequentially; the key one-click pairing is MP4 screener + DCP from the same master. Engine is already independent/cancellable units — mostly an `AppState`/UI reshape.
+- [ ] **DMG distribution**: `Scripts/make-dmg.sh` — build Release, codesign (ad-hoc default; Developer ID + `notarytool` + staple when `DEVELOPER_ID` set), `hdiutil` a shareable DMG. No app code changes — no sandbox or private APIs in use.
+
+Deferred:
 - [ ] Software x264-quality option if hardware H.264 at 6 Mb/s underperforms the HandBrake original.
-- [ ] 4K DCP, encrypted (KDM) DCPs — deliberately deferred.
+- [ ] DCP timed-text subtitles (real XML/PNG subs, vs. the MP4 burn-in above), 4K DCP, encrypted (KDM) DCPs, HDR tone mapping.
 - [ ] Real cinema-server ingest test before any actual screening.
 
 ## Build & Test

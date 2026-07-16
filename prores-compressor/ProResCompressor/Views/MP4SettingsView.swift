@@ -1,9 +1,12 @@
 import SwiftUI
 import TranscodeKit
+import UniformTypeIdentifiers
 
 struct MP4SettingsView: View {
     @Environment(AppState.self) private var appState
     let source: ProbedSource
+
+    @State private var showingSubtitlePicker = false
 
     private static let presets: [Double] = [2, 3, 4]
 
@@ -28,6 +31,40 @@ struct MP4SettingsView: View {
                     .foregroundStyle(.secondary)
             case .targetSize:
                 targetSizeControls
+            }
+
+            Divider()
+            subtitleRow
+        }
+        .fileImporter(isPresented: $showingSubtitlePicker,
+                      allowedContentTypes: [UTType(filenameExtension: "srt") ?? .plainText, .plainText, .text]) { result in
+            if case .success(let url) = result {
+                appState.mp4SubtitleURL = url
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var subtitleRow: some View {
+        @Bindable var appState = appState
+        HStack {
+            if let subtitleURL = appState.mp4SubtitleURL {
+                Image(systemName: "captions.bubble.fill").foregroundStyle(.secondary)
+                Text(subtitleURL.lastPathComponent)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Button {
+                    appState.mp4SubtitleURL = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Button("Burn subtitles… (.srt)") { showingSubtitlePicker = true }
+                Text("Optional — captions are drawn into the picture (8-bit).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

@@ -23,15 +23,20 @@ public struct MP4Settings: Sendable, Equatable {
     /// the source's natural size.
     public var maxWidth: Int?
     public var maxHeight: Int?
+    /// Optional .srt to burn into the picture. When set (and it has cues), the
+    /// video is decoded to 8-bit BGRA, captions drawn per frame, then encoded.
+    public var subtitleURL: URL?
 
     public init(rateControl: RateControl, codec: Codec = .hevc,
                 audioBitsPerSecond: Int = 256_000,
-                maxWidth: Int? = nil, maxHeight: Int? = nil) {
+                maxWidth: Int? = nil, maxHeight: Int? = nil,
+                subtitleURL: URL? = nil) {
         self.rateControl = rateControl
         self.codec = codec
         self.audioBitsPerSecond = audioBitsPerSecond
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
+        self.subtitleURL = subtitleURL
     }
 
     /// Port of Kenneth's HandBrake "MP4 Small & HQ" preset: H.264 High,
@@ -93,6 +98,9 @@ private final class MP4ExportSession: @unchecked Sendable {
     private let videoInput: AVAssetWriterInput
     private let audioOutput: AVAssetReaderTrackOutput?
     private let audioInput: AVAssetWriterInput?
+    /// Non-nil only when burning subtitles; drives the BGRA draw-and-append path.
+    private let burner: SubtitleBurner?
+    private let pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
 
     private let lock = NSLock()
     private var continuation: CheckedContinuation<ExportResult, Error>?
@@ -131,14 +139,31 @@ private final class MP4ExportSession: @unchecked Sendable {
         }
         writer.shouldOptimizeForNetworkUse = true
 
+        // --- Subtitles (optional) ---
+        // Burning captions forces an 8-bit BGRA decode/draw/encode path; when
+        // there are no cues we keep the fast hardware passthrough.
+        if let subtitleURL = settings.subtitleURL,
+           let cues = try? SRTParser.parse(url: subtitleURL), !cues.isEmpty {
+            burner = SubtitleBurner(cues: cues)
+        } else {
+            burner = nil
+        }
+        let burningSubtitles = burner != nil
+
         // --- Video ---
-        let pixelFormat: OSType = source.bitDepth >= 10
-            ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
-            : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        let pixelFormat: OSType
+        if burningSubtitles {
+            pixelFormat = kCVPixelFormatType_32BGRA
+        } else {
+            pixelFormat = source.bitDepth >= 10
+                ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+                : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        }
         videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
         ])
-        videoOutput.alwaysCopiesSampleData = false
+        // Burn path draws into the buffer, so it needs a mutable copy.
+        videoOutput.alwaysCopiesSampleData = burningSubtitles
 
         switch settings.rateControl {
         case .targetSize(let bytes):
@@ -197,6 +222,18 @@ private final class MP4ExportSession: @unchecked Sendable {
         // Carry rotation/flip metadata (e.g. phone footage) instead of baking
         // it into pixels.
         videoInput.transform = source.preferredTransform
+
+        if burningSubtitles {
+            pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
+                assetWriterInput: videoInput,
+                sourcePixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                    kCVPixelBufferWidthKey as String: source.width,
+                    kCVPixelBufferHeightKey as String: source.height,
+                ])
+        } else {
+            pixelBufferAdaptor = nil
+        }
 
         // --- Audio (AAC stereo) ---
         if source.hasAudio, let audioTrack = asset.tracks(withMediaType: .audio).first {
@@ -280,11 +317,39 @@ private final class MP4ExportSession: @unchecked Sendable {
         }
         writer.startSession(atSourceTime: .zero)
 
-        pump(input: videoInput, output: videoOutput,
-             queue: DispatchQueue(label: "mp4export.video"), reportsProgress: true)
+        pumpVideo(queue: DispatchQueue(label: "mp4export.video"))
         if let audioInput, let audioOutput {
             pump(input: audioInput, output: audioOutput,
                  queue: DispatchQueue(label: "mp4export.audio"), reportsProgress: false)
+        }
+    }
+
+    private func pumpVideo(queue: DispatchQueue) {
+        videoInput.requestMediaDataWhenReady(on: queue) { [weak self] in
+            guard let self else { return }
+            while self.videoInput.isReadyForMoreMediaData {
+                guard let sample = self.videoOutput.copyNextSampleBuffer() else {
+                    self.videoInput.markAsFinished()
+                    self.inputFinished()
+                    return
+                }
+                let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+                let appended: Bool
+                if let burner = self.burner, let adaptor = self.pixelBufferAdaptor,
+                   let pixelBuffer = CMSampleBufferGetImageBuffer(sample) {
+                    burner.draw(into: pixelBuffer, at: pts.seconds)
+                    appended = adaptor.append(pixelBuffer, withPresentationTime: pts)
+                } else {
+                    appended = self.videoInput.append(sample)
+                }
+                guard appended else {
+                    self.reader.cancelReading()
+                    let message = self.writer.error?.localizedDescription ?? "encoder rejected samples"
+                    self.finish(.failure(ExportError.encodingFailed(message)))
+                    return
+                }
+                self.reportProgress(at: pts)
+            }
         }
     }
 
@@ -400,6 +465,9 @@ private final class MP4ExportSession: @unchecked Sendable {
         if case .targetSize(let target) = settings.rateControl {
             outputLines.append("Target size: \(ByteCountFormatter.string(fromByteCount: target, countStyle: .file))"
                 + (outputBytes <= target ? " — met" : " — EXCEEDED, re-check"))
+        }
+        if let burner {
+            outputLines.append("Subtitles: burned in from SRT (\(burner.cueCount) cues)")
         }
         report.add("Output", outputLines)
 
