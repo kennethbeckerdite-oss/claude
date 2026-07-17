@@ -1,3 +1,4 @@
+import AppKit
 import DCPKit
 import Foundation
 import Observation
@@ -174,8 +175,34 @@ final class AppState {
 
     // MARK: - Running
 
+    /// Where this run's exports land, chosen by the user when Export is hit.
+    private var exportDestination: URL?
+    private static let destinationDefaultsKey = "lastExportDestination"
+
+    /// Asks where the exports should go. Returns nil if the user cancels.
+    private func chooseDestination() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Save Here"
+        panel.message = "Where should your exports go?"
+        if let saved = UserDefaults.standard.string(forKey: Self.destinationDefaultsKey) {
+            panel.directoryURL = URL(fileURLWithPath: saved, isDirectory: true)
+        } else {
+            panel.directoryURL = FileManager.default.urls(for: .moviesDirectory,
+                                                          in: .userDomainMask).first
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        UserDefaults.standard.set(url.path, forKey: Self.destinationDefaultsKey)
+        return url
+    }
+
     func exportAll() {
         guard !isRunning, readyCount > 0 else { return }
+        guard let destination = chooseDestination() else { return }
+        exportDestination = destination
         isRunning = true
         beginSleepPrevention()
         runTask = Task {
@@ -205,7 +232,7 @@ final class AppState {
             // that already have a result (e.g. after a retry) are skipped.
             if item.deliverable != .cinemaDCP, item.mp4Result == nil {
                 setRunningHalf(id, .festivalMP4)
-                let exporter = MP4Exporter(settings: Self.mp4Settings(for: item))
+                let exporter = MP4Exporter(settings: Self.mp4Settings(for: item, destination: exportDestination))
                 let result = try await exporter.export(source: item.source) { progress in
                     Task { @MainActor [weak self] in self?.setProgress(id, progress) }
                 }
@@ -217,7 +244,7 @@ final class AppState {
             try Task.checkCancellation()
             if item.deliverable != .festivalMP4, item.dcpResult == nil {
                 setRunningHalf(id, .cinemaDCP)
-                let exporter = DCPExporter(settings: Self.dcpSettings(for: item))
+                let exporter = DCPExporter(settings: Self.dcpSettings(for: item, destination: exportDestination))
                 let result = try await exporter.export(source: item.source) { progress in
                     Task { @MainActor [weak self] in self?.setProgress(id, progress) }
                 }
@@ -270,7 +297,7 @@ final class AppState {
 
     // MARK: - Settings mapping (exporters are built the moment a job starts)
 
-    static func mp4Settings(for item: QueueItem) -> MP4Settings {
+    static func mp4Settings(for item: QueueItem, destination: URL? = nil) -> MP4Settings {
         var settings: MP4Settings
         switch item.mp4.mode {
         case .targetSize:
@@ -283,10 +310,11 @@ final class AppState {
             settings = .festivalShort
         }
         settings.subtitleURL = item.mp4.subtitleURL
+        settings.destinationDirectory = destination
         return settings
     }
 
-    static func dcpSettings(for item: QueueItem) -> DCPSettings {
+    static func dcpSettings(for item: QueueItem, destination: URL? = nil) -> DCPSettings {
         let title = item.dcp.title.isEmpty
             ? item.source.url.deletingPathExtension().lastPathComponent
             : item.dcp.title
@@ -299,6 +327,7 @@ final class AppState {
             j2kBitsPerSecond: Int(item.dcp.bitrateMbps * 1_000_000),
             dcnc: item.dcp.dcnc,
             sourceGamma: item.dcp.sourceGamma,
+            destinationDirectory: destination,
             elements: elements)
     }
 

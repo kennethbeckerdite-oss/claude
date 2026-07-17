@@ -174,10 +174,11 @@ public enum RenderSize {
     }
 }
 
-/// Picks a non-clobbering output URL next to the source:
-/// "Name<suffix>.<ext>", then "Name<suffix> 2.<ext>", …
-public func availableOutputURL(besides sourceURL: URL, suffix: String, pathExtension: String) -> URL {
-    let dir = sourceURL.deletingLastPathComponent()
+/// Picks a non-clobbering output URL in `directory` (default: next to the
+/// source): "Name<suffix>.<ext>", then "Name<suffix> 2.<ext>", …
+public func availableOutputURL(besides sourceURL: URL, suffix: String, pathExtension: String,
+                               in directory: URL? = nil) -> URL {
+    let dir = directory ?? sourceURL.deletingLastPathComponent()
     let base = sourceURL.deletingPathExtension().lastPathComponent + suffix
     var candidate = dir.appendingPathComponent(base).appendingPathExtension(pathExtension)
     var counter = 2

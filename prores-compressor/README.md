@@ -54,13 +54,11 @@ Covers bitrate math, DCI framing geometry, Rec.709→XYZ color test vectors, and
 
 ## Using the app
 
-1. Drag a ProRes `.mov` onto the window (or click **Choose File…**).
-2. Pick **MP4** or **DCP**:
-   - MP4: choose target size (2/3/4 GB or custom) and codec (HEVC default).
-   - DCP: choose Flat (1998×1080) or Scope (2048×858) and J2K bitrate (default 125 Mbps).
-3. Export. Output lands next to the source file.
+1. Drop your film anywhere in the window (works at any time, even mid-export) or click **Choose Film…** — each film becomes a card.
+2. On the card, answer one question — *What do you need?*: **Festival upload file** (MP4 under 2 GB), **Cinema package (DCP)**, or **Both**. Everything else has smart defaults; per-film technical controls (codec, target size, container, bitrate, DCNC codes, extra videos in the package, subtitle burn-in, source gamma) live under **Advanced settings**.
+3. Hit **Export / Export All** and pick where the exports should go (the app remembers your last choice). Cards run one at a time with live progress; finished cards offer **Show in Finder / Report / Zip for Upload**.
 
-DCP sources must be 24.0 or 23.976 fps (23.976 is conformed to 24 with a 0.1% audio resample). DCP encodes are CPU-bound JPEG 2000 — expect roughly 15–25 fps on an M4, i.e. a 90-minute feature takes ~2–4 hours. The app prevents sleep while exporting.
+DCP sources must be 24, 25, or 30 fps (23.976/29.97 are conformed with a 0.1% audio resample). DCP encodes are CPU-bound JPEG 2000 — expect roughly 15–25 fps on an M4, i.e. a 90-minute feature takes ~2–4 hours. The app prevents sleep while exporting.
 
 ## Validating a DCP
 

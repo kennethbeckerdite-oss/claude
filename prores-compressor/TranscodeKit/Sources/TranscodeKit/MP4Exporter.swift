@@ -26,17 +26,20 @@ public struct MP4Settings: Sendable, Equatable {
     /// Optional .srt to burn into the picture. When set (and it has cues), the
     /// video is decoded to 8-bit BGRA, captions drawn per frame, then encoded.
     public var subtitleURL: URL?
+    /// Where the output lands; nil = next to the source file.
+    public var destinationDirectory: URL?
 
     public init(rateControl: RateControl, codec: Codec = .hevc,
                 audioBitsPerSecond: Int = 256_000,
                 maxWidth: Int? = nil, maxHeight: Int? = nil,
-                subtitleURL: URL? = nil) {
+                subtitleURL: URL? = nil, destinationDirectory: URL? = nil) {
         self.rateControl = rateControl
         self.codec = codec
         self.audioBitsPerSecond = audioBitsPerSecond
         self.maxWidth = maxWidth
         self.maxHeight = maxHeight
         self.subtitleURL = subtitleURL
+        self.destinationDirectory = destinationDirectory
     }
 
     /// Port of Kenneth's HandBrake "MP4 Small & HQ" preset: H.264 High,
@@ -69,7 +72,8 @@ public final class MP4Exporter: Exporter {
 
     public func export(source: ProbedSource,
                        onProgress: @escaping @Sendable (ExportProgress) -> Void) async throws -> ExportResult {
-        let outputURL = availableOutputURL(besides: source.url, suffix: " (compressed)", pathExtension: "mp4")
+        let outputURL = availableOutputURL(besides: source.url, suffix: " (compressed)",
+                                           pathExtension: "mp4", in: settings.destinationDirectory)
         let session = try MP4ExportSession(source: source, settings: settings,
                                            outputURL: outputURL, onProgress: onProgress)
         do {
@@ -162,8 +166,9 @@ private final class MP4ExportSession: @unchecked Sendable {
         videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
         ])
-        // Burn path draws into the buffer, so it needs a mutable copy.
-        videoOutput.alwaysCopiesSampleData = burningSubtitles
+        // Burn path copies frames into its own pool buffers before drawing,
+        // so the reader never needs to duplicate sample data.
+        videoOutput.alwaysCopiesSampleData = false
 
         switch settings.rateControl {
         case .targetSize(let bytes):
@@ -336,9 +341,16 @@ private final class MP4ExportSession: @unchecked Sendable {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sample)
                 let appended: Bool
                 if let burner = self.burner, let adaptor = self.pixelBufferAdaptor,
-                   let pixelBuffer = CMSampleBufferGetImageBuffer(sample) {
-                    burner.draw(into: pixelBuffer, at: pts.seconds)
-                    appended = adaptor.append(pixelBuffer, withPresentationTime: pts)
+                   let decoded = CMSampleBufferGetImageBuffer(sample) {
+                    // Decoder-owned buffers aren't guaranteed writable — copy
+                    // into a pool buffer we own before drawing captions on it.
+                    guard let writable = self.copyToPoolBuffer(decoded, adaptor: adaptor) else {
+                        self.reader.cancelReading()
+                        self.finish(.failure(ExportError.encodingFailed("could not allocate a frame buffer for subtitles")))
+                        return
+                    }
+                    burner.draw(into: writable, at: pts.seconds)
+                    appended = adaptor.append(writable, withPresentationTime: pts)
                 } else {
                     appended = self.videoInput.append(sample)
                 }
@@ -351,6 +363,34 @@ private final class MP4ExportSession: @unchecked Sendable {
                 self.reportProgress(at: pts)
             }
         }
+    }
+
+    /// BGRA copy of a decoded frame into the adaptor's pool.
+    private func copyToPoolBuffer(_ source: CVPixelBuffer,
+                                  adaptor: AVAssetWriterInputPixelBufferAdaptor) -> CVPixelBuffer? {
+        guard let pool = adaptor.pixelBufferPool else { return nil }
+        var destination: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &destination) == kCVReturnSuccess,
+              let destination else { return nil }
+
+        CVPixelBufferLockBaseAddress(source, .readOnly)
+        CVPixelBufferLockBaseAddress(destination, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(destination, [])
+            CVPixelBufferUnlockBaseAddress(source, .readOnly)
+        }
+        guard let sourceBase = CVPixelBufferGetBaseAddress(source),
+              let destinationBase = CVPixelBufferGetBaseAddress(destination) else { return nil }
+
+        let height = min(CVPixelBufferGetHeight(source), CVPixelBufferGetHeight(destination))
+        let sourceStride = CVPixelBufferGetBytesPerRow(source)
+        let destinationStride = CVPixelBufferGetBytesPerRow(destination)
+        let rowBytes = min(sourceStride, destinationStride)
+        for row in 0..<height {
+            memcpy(destinationBase + row * destinationStride,
+                   sourceBase + row * sourceStride, rowBytes)
+        }
+        return destination
     }
 
     private func pump(input: AVAssetWriterInput, output: AVAssetReaderTrackOutput,

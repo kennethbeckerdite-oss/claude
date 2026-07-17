@@ -24,19 +24,22 @@ public struct DCPSettings: Sendable {
     /// is the mastering-suite convention; some houses assume 2.2 for unlabeled
     /// web-style masters (e.g. Simple DCP's guidelines).
     public var sourceGamma: Double
+    /// Where the package folder lands; nil = next to the first source file.
+    public var destinationDirectory: URL?
     /// Additional videos for a multi-composition package. When empty, the
     /// single `source` passed to `export` is the only composition.
     public var elements: [DCPElement]
 
     public init(contentTitle: String, container: DCPContainer,
                 j2kBitsPerSecond: Int = 125_000_000, dcnc: DCNCOptions = DCNCOptions(),
-                sourceGamma: Double = 2.4,
+                sourceGamma: Double = 2.4, destinationDirectory: URL? = nil,
                 elements: [DCPElement] = []) {
         self.contentTitle = contentTitle
         self.container = container
         self.j2kBitsPerSecond = j2kBitsPerSecond
         self.dcnc = dcnc
         self.sourceGamma = sourceGamma
+        self.destinationDirectory = destinationDirectory
         self.elements = elements
     }
 }
@@ -408,7 +411,7 @@ public final class DCPExporter: Exporter {
                                          frameCount: estimatedFrames,
                                          hasAudio: firstSource.hasAudio,
                                          options: settings.dcnc)
-        let parent = firstSource.url.deletingLastPathComponent()
+        let parent = settings.destinationDirectory ?? firstSource.url.deletingLastPathComponent()
         var candidate = parent.appendingPathComponent(name, isDirectory: true)
         var counter = 2
         while FileManager.default.fileExists(atPath: candidate.path) {

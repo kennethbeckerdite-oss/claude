@@ -30,6 +30,9 @@ Clarity and simplicity beat pro-tool density:
   is the error-rewriting chokepoint.
 - Technical controls live behind each card's "Advanced settings" disclosure —
   never on the main path.
+- Export always asks where files should go (folder panel on Export, one choice
+  per run, last choice remembered); engine settings carry an optional
+  `destinationDirectory` with nil = next-to-source.
 
 ## Status (v1 verified on real footage, July 2026)
 

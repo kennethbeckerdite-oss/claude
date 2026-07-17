@@ -1,48 +1,9 @@
-import SwiftUI
+import Foundation
 import TranscodeKit
 
-struct SourceInfoView: View {
-    let source: ProbedSource
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(source.url.lastPathComponent)
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text(detailLine)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var detailLine: String {
-        var parts = [
-            source.videoCodecName,
-            dimensionsText,
-            String(format: "%.3g fps", source.frameRate),
-            Self.durationText(source.duration),
-            Self.sizeText(source.fileSizeBytes),
-        ]
-        if source.hasAudio {
-            parts.append("\(source.audioChannels)ch audio")
-        } else {
-            parts.append("no audio")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private var dimensionsText: String {
-        var text = "\(source.displayWidth)×\(source.displayHeight)"
-        if source.naturalWidth != source.width || source.naturalHeight != source.height {
-            text += " (anamorphic \(source.width)×\(source.height))"
-        }
-        return text
-    }
-
+/// Shared human-readable formatters for source/output facts.
+/// (The card UI composes its own layout; only these helpers are shared.)
+enum SourceInfoView {
     static func durationText(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
