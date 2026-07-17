@@ -8,8 +8,8 @@ struct ProResCompressorApp: App {
         Window("ProRes Compressor", id: "main") {
             ContentView()
                 .environment(appState)
-                .frame(minWidth: 520, minHeight: 480)
+                .frame(minWidth: 540, minHeight: 600)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
     }
 }

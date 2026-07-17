@@ -3,18 +3,22 @@ import SwiftUI
 import TranscodeKit
 import UniformTypeIdentifiers
 
+/// Advanced cinema-package controls for one film card. Binds to that card's
+/// config only; the simple path (title + auto everything) lives on the card.
 struct DCPSettingsView: View {
     @Environment(AppState.self) private var appState
     let source: ProbedSource
+    @Binding var config: AppState.DCPJobConfig
+    let itemID: AppState.QueueItem.ID
 
     @State private var showingElementPicker = false
 
     var body: some View {
-        @Bindable var appState = appState
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Content title", text: $appState.dcpContentTitle)
+            Text("Cinema package (DCP)")
+                .font(.headline)
 
-            Picker("Container", selection: $appState.dcpContainer) {
+            Picker("Screen shape", selection: $config.container) {
                 ForEach(DCPContainer.allCases, id: \.self) { container in
                     Text(container.displayName).tag(container)
                 }
@@ -22,17 +26,17 @@ struct DCPSettingsView: View {
             .pickerStyle(.radioGroup)
             .horizontalRadioGroupLayout()
 
-            LabeledContent("JPEG 2000 bitrate") {
+            LabeledContent("Picture quality") {
                 HStack {
-                    Slider(value: $appState.dcpBitrateMbps, in: 75...250, step: 25)
+                    Slider(value: $config.bitrateMbps, in: 75...250, step: 25)
                         .frame(width: 200)
-                    Text("\(Int(appState.dcpBitrateMbps)) Mb/s")
+                    Text("\(Int(config.bitrateMbps)) Mb/s")
                         .monospacedDigit()
                         .frame(width: 70, alignment: .trailing)
                 }
             }
 
-            Picker("Kind", selection: $appState.dcpDCNC.kind) {
+            Picker("Kind", selection: $config.dcnc.kind) {
                 ForEach(DCNCOptions.Kind.allCases, id: \.self) { kind in
                     Text(kind == .auto ? "Auto (by duration)" : kind.rawValue).tag(kind)
                 }
@@ -40,17 +44,15 @@ struct DCPSettingsView: View {
 
             LabeledContent("Language / Subs / Facility") {
                 HStack {
-                    TextField("XX", text: $appState.dcpDCNC.audioLanguage)
+                    TextField("XX", text: $config.dcnc.audioLanguage)
                         .frame(width: 44)
-                    TextField("XX", text: $appState.dcpDCNC.subtitleLanguage)
+                    TextField("XX", text: $config.dcnc.subtitleLanguage)
                         .frame(width: 44)
-                    TextField("PRC", text: $appState.dcpDCNC.facility)
+                    TextField("PRC", text: $config.dcnc.facility)
                         .frame(width: 60)
                 }
                 .multilineTextAlignment(.center)
             }
-
-            additionalVideos
 
             LabeledContent("Package name") {
                 Text(namePreview)
@@ -61,62 +63,48 @@ struct DCPSettingsView: View {
                     .textSelection(.enabled)
             }
 
-            if !frameRateSupported(source.frameRate) {
-                Label("DCP supports 24, 25, or 30 fps (this file is \(String(format: "%.3f", source.frameRate)) fps).",
-                      systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .font(.callout)
-            } else {
-                Text(summary)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            additionalVideos
+
+            Text(summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .fileImporter(isPresented: $showingElementPicker,
                       allowedContentTypes: [.movie, .quickTimeMovie, .mpeg4Movie]) { result in
             if case .success(let url) = result {
-                appState.addDCPElement(url: url)
+                appState.addDCPElement(to: itemID, url: url)
             }
         }
     }
 
     @ViewBuilder
     private var additionalVideos: some View {
-        @Bindable var appState = appState
-        Divider()
         HStack {
-            Text(appState.dcpExtraElements.isEmpty
-                 ? "Single composition"
-                 : "\(appState.dcpExtraElements.count + 1) compositions (one package)")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Spacer()
-            if appState.isAddingDCPElement {
-                ProgressView().controlSize(.small)
-            }
-            Button("Add video…") { showingElementPicker = true }
-                .disabled(appState.isAddingDCPElement)
-        }
-
-        if !appState.dcpExtraElements.isEmpty {
-            // Primary shown first for context, then the removable extras.
-            Text("1. \(appState.dcpContentTitle) — plays first")
+            Text(config.extraElements.isEmpty
+                 ? "One film in this package"
+                 : "\(config.extraElements.count + 1) films in this package — each gets its own title on the cinema server")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            ForEach(Array(appState.dcpExtraElements.enumerated()), id: \.element.id) { index, element in
+            Spacer()
+            Button("Add another video…") { showingElementPicker = true }
+                .font(.caption)
+        }
+
+        if !config.extraElements.isEmpty {
+            ForEach(Array(config.extraElements.enumerated()), id: \.element.id) { index, element in
                 HStack {
                     Text("\(index + 2).")
                         .foregroundStyle(.secondary)
                     TextField("Title", text: Binding(
                         get: { element.title },
-                        set: { appState.dcpExtraElements[index].title = $0 }))
-                    if !frameRateSupported(element.source.frameRate) {
+                        set: { config.extraElements[index].title = $0 }))
+                    if !EditRate.isSupported(frameRate: element.source.frameRate) {
                         Image(systemName: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
-                            .help("\(String(format: "%.3f", element.source.frameRate)) fps is not a DCP rate")
+                            .help("\(String(format: "%.3f", element.source.frameRate)) fps — cinemas need 24, 25, or 30")
                     }
                     Button {
-                        appState.removeDCPElement(id: element.id)
+                        config.extraElements.remove(at: index)
                     } label: {
                         Image(systemName: "minus.circle")
                     }
@@ -130,31 +118,24 @@ struct DCPSettingsView: View {
     private var namePreview: String {
         let fps = EditRate.forSource(frameRate: source.frameRate)?.rate.fps ?? 24
         return DCPPackage.folderName(
-            contentTitle: appState.dcpContentTitle.isEmpty
-                ? source.url.deletingPathExtension().lastPathComponent : appState.dcpContentTitle,
-            container: appState.dcpContainer,
+            contentTitle: config.title.isEmpty
+                ? source.url.deletingPathExtension().lastPathComponent : config.title,
+            container: config.container,
             frameCount: max(1, Int((source.duration * Double(fps)).rounded())),
             hasAudio: source.hasAudio,
-            options: appState.dcpDCNC)
-    }
-
-    private func frameRateSupported(_ frameRate: Double) -> Bool {
-        EditRate.isSupported(frameRate: frameRate)
+            options: config.dcnc)
     }
 
     private var summary: String {
         let mapping = EditRate.forSource(frameRate: source.frameRate)
         let fps = mapping?.rate.fps ?? 24
-        let suggestion = DCPContainer.suggested(width: source.displayWidth, height: source.displayHeight)
-        var text = "SMPTE 2K \(fps) fps, unencrypted · 12-bit X'Y'Z' · 5.1-padded 24-bit/48 kHz audio."
+        var text = "Made to the cinema standard (SMPTE 2K, \(fps) fps, surround-ready sound)."
         if mapping?.needsPullUp == true {
-            text += " Fractional source rate will be conformed with a 0.1% speed-up."
+            text += " Your film's frame rate will be gently conformed (0.1% — nobody will notice)."
         }
-        if suggestion != appState.dcpContainer {
-            text += " Source aspect suggests \(suggestion.displayName)."
-        }
-        if !appState.dcpExtraElements.isEmpty {
-            text += " Each video becomes its own title in the package."
+        let suggestion = DCPContainer.suggested(width: source.displayWidth, height: source.displayHeight)
+        if suggestion != config.container {
+            text += " Heads-up: this film's shape suggests \(suggestion.displayName)."
         }
         return text
     }

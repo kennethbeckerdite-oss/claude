@@ -11,6 +11,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Personal-use build: App Sandbox off, ad-hoc signing.
 
+## Audience & UI philosophy (Kenneth's direction — binding for UI work)
+
+The users are **filmmakers who don't use software like this** — people who can't
+afford commercial DCP services and need their short to play at festivals.
+Clarity and simplicity beat pro-tool density:
+
+- The UI is a single column of film cards. The whole window is always a drop
+  target; the list is always visible; one primary button (Export / Export All).
+- Every card must be exportable with **zero required decisions** (smart
+  defaults: Festival MP4, title from filename, container from aspect, auto
+  kind). New cards seed from last-used choices.
+- **Plain language in every user-facing string**: outcomes, not codecs
+  ("Festival upload file — an MP4 under 2 GB" not "H.264 High 6 Mb/s";
+  "Making your cinema package… about 2 hours left" not "Encoding picture").
+  Errors must say what to DO ("Export your film at 24 fps and try again"),
+  with the technical detail in parentheses at most. `AppState.friendlyMessage`
+  is the error-rewriting chokepoint.
+- Technical controls live behind each card's "Advanced settings" disclosure —
+  never on the main path.
+
 ## Status (v1 verified on real footage, July 2026)
 
 - MP4 path: confirmed working — 23 GB ProRes master → 1.9 GB MP4.
@@ -68,6 +88,16 @@ Note: building requires macOS + Xcode. Remote/Linux Claude sessions can edit sou
 ## Architecture
 
 Strict engine/UI split. The app target (`ProResCompressor/`) is a thin SwiftUI layer over the `TranscodeKit` local Swift package. All export logic goes in the package, never in views.
+
+App layer (post-redesign): `AppState` is item-centric — `QueueItem` (source +
+per-item `Deliverable`/`MP4JobConfig`/`DCPJobConfig` + status/results), a
+sequential runner (`exportAll`, "both" cards run MP4 then DCP, halves with
+results are skipped on retry), and last-used-defaults seeding. Views:
+`ContentView` (column + global drop + footer), `FilmCardView` (the card:
+deliverable choice, title, Advanced disclosure, status/results),
+`MP4SettingsView`/`DCPSettingsView` (Advanced content, bound to the item's
+configs), `DropStripView`/`EmptyStateView`. There are no global export
+settings and no wizard phases.
 
 - `TranscodeKit` target — `SourceProbe` (async AVAsset probing incl. naturalSize/transform), `Exporter` protocol + shared types (`RenderSize` fitting), `BitrateCalculator` (pure math), `MP4Exporter` (AVAssetReader → AVAssetWriter).
 - `DCPKit` target — the DCP pipeline: `DCPExporter` orchestrates decode → framing (`Framing`) → Rec.709→XYZ transform (`ColorTransform`) → JPEG 2000 (`J2KEncoder` over `COpenJPEG`, frame-parallel) → MXF wrap (`MXFWriter` over `CASDCP`) → XML packaging (`DCPPackage` + `DCNCOptions`) → self-check (`DCPValidator`). Audio: `AudioConformer` (24-bit/48 kHz, 5.1-padded stereo, 23.976→24 pull-up).

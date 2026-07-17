@@ -1,138 +1,167 @@
-import DCPKit
 import SwiftUI
 import TranscodeKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(AppState.self) private var appState
-
-    var body: some View {
-        Group {
-            if appState.isRunningQueue {
-                QueueView()
-            } else {
-                switch appState.phase {
-                case .idle:
-                    if appState.queue.isEmpty {
-                        DropZoneView()
-                    } else {
-                        VStack(spacing: 16) {
-                            DropZoneView()
-                            QueueView()
-                        }
-                    }
-                case .probing:
-                    ProgressView("Reading file…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .configuring(let source):
-                    ConfigureView(source: source)
-                case .exporting(let source):
-                    ExportProgressView(source: source)
-                case .done(let source, let result):
-                    DoneView(source: source, result: result)
-                case .failed(let source, let message):
-                    FailedView(hasSource: source != nil, message: message)
-                }
-            }
-        }
-        .padding(24)
-        .animation(.default, value: phaseKey)
-    }
-
-    private var phaseKey: String {
-        if appState.isRunningQueue { return "queue" }
-        switch appState.phase {
-        case .idle: return appState.queue.isEmpty ? "idle" : "idle-queue"
-        case .probing: return "probing"
-        case .configuring: return "configuring"
-        case .exporting: return "exporting"
-        case .done: return "done"
-        case .failed: return "failed"
-        }
-    }
-}
-
-struct ConfigureView: View {
-    @Environment(AppState.self) private var appState
-    let source: ProbedSource
+    @State private var isDropTargeted = false
 
     var body: some View {
         @Bindable var appState = appState
-        VStack(alignment: .leading, spacing: 16) {
-            SourceInfoView(source: source)
-
-            Picker("Format", selection: $appState.format) {
-                ForEach(AppState.ExportFormat.allCases, id: \.self) { format in
-                    Text(format.rawValue).tag(format)
+        Group {
+            if appState.items.isEmpty {
+                EmptyStateView()
+            } else {
+                VStack(spacing: 12) {
+                    DropStripView()
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach($appState.items) { $item in
+                                FilmCardView(item: $item)
+                            }
+                        }
+                        .padding(2)
+                    }
+                    footerBar
                 }
+                .padding(16)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
-            switch appState.format {
-            case .mp4:
-                MP4SettingsView(source: source)
-            case .dcp:
-                DCPSettingsView(source: source)
+        }
+        // The whole window accepts drops, in every state — even mid-export.
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, lineWidth: 3)
+                    .background(Color.accentColor.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        Label("Drop to add", systemImage: "plus.circle.fill")
+                            .font(.title2)
+                            .padding(10)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                    .padding(6)
+                    .allowsHitTesting(false)
             }
+        }
+        .alert("Hmm", isPresented: Binding(
+            get: { appState.alertMessage != nil },
+            set: { if !$0 { appState.alertMessage = nil } })) {
+            Button("OK") { appState.alertMessage = nil }
+        } message: {
+            Text(appState.alertMessage ?? "")
+        }
+    }
 
+    private var footerBar: some View {
+        HStack {
+            if appState.probingCount > 0 {
+                ProgressView().controlSize(.small)
+                Text("Reading file…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if !appState.isRunning, appState.items.contains(where: { $0.status == .done }) {
+                Button("Clear Finished") { appState.clearFinished() }
+            }
             Spacer()
-
-            HStack {
-                Button("Choose Another File") { appState.reset() }
-                Spacer()
-                Button("Add to Queue") { appState.addToQueue() }
-                    .disabled(!exportAllowed)
-                Button("Screener + DCP") { appState.addScreenerAndDCP() }
-                    .disabled(!dcpAllowed)
-                    .help("Queue a Festival Short MP4 screener and a DCP from this master")
-                Button("Export") { appState.startExport() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!exportAllowed)
+            if appState.isRunning {
+                Button("Cancel") { appState.cancel() }
+                    .keyboardShortcut(.cancelAction)
+                    .controlSize(.large)
+            } else {
+                Button {
+                    appState.exportAll()
+                } label: {
+                    Text(appState.readyCount > 1 ? "Export All" : "Export")
+                        .frame(minWidth: 120)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
+                .disabled(appState.readyCount == 0)
             }
         }
     }
 
-    private var dcpAllowed: Bool {
-        let allSources = [source] + appState.dcpExtraElements.map(\.source)
-        return allSources.allSatisfy { EditRate.isSupported(frameRate: $0.frameRate) }
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url {
+                    Task { @MainActor in appState.addFiles([url]) }
+                }
+            }
+        }
+        return true
     }
+}
 
-    private var exportAllowed: Bool {
-        switch appState.format {
-        case .mp4:
-            return true
-        case .dcp:
-            // DCP supports 24/25/30 (incl. 23.976/29.97). Every composition
-            // in the package must qualify.
-            return dcpAllowed
+/// First-launch screen: says what the app does in one line, in the audience's
+/// words, and invites the drop.
+struct EmptyStateView: View {
+    @Environment(AppState.self) private var appState
+    @State private var showingPicker = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "film.stack")
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary)
+            Text("Get your film festival-ready")
+                .font(.title)
+            Text("Turn your movie file into what festivals ask for:\na small MP4 for uploads, or a cinema package (DCP) for the screen.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Text("Drop your film anywhere in this window")
+                .font(.headline)
+                .padding(.top, 8)
+            Button("Choose Film…") { showingPicker = true }
+                .controlSize(.large)
+                .keyboardShortcut("o")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .fileImporter(isPresented: $showingPicker,
+                      allowedContentTypes: [.movie, .quickTimeMovie, .mpeg4Movie],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                appState.addFiles(urls)
+            }
         }
     }
 }
 
-struct FailedView: View {
+/// Persistent, compact drop target shown above the film list.
+struct DropStripView: View {
     @Environment(AppState.self) private var appState
-    let hasSource: Bool
-    let message: String
+    @State private var showingPicker = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 40))
-                .foregroundStyle(.orange)
-            Text("Export Failed")
-                .font(.title2)
-            Text(message)
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.doc")
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-            HStack {
-                Button("Start Over") { appState.reset() }
-                if hasSource {
-                    Button("Back to Settings") { appState.backToSettings() }
-                        .keyboardShortcut(.defaultAction)
-                }
+            Text("Drop another film here — or")
+                .foregroundStyle(.secondary)
+            Button("Choose Film…") { showingPicker = true }
+        }
+        .font(.callout)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
+                .foregroundStyle(Color.secondary.opacity(0.5))
+        )
+        .fileImporter(isPresented: $showingPicker,
+                      allowedContentTypes: [.movie, .quickTimeMovie, .mpeg4Movie],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                appState.addFiles(urls)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
