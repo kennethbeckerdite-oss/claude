@@ -20,17 +20,23 @@ public struct DCPSettings: Sendable {
     public var container: DCPContainer
     public var j2kBitsPerSecond: Int
     public var dcnc: DCNCOptions
+    /// Display gamma assumed when decoding the Rec.709 source. 2.4 (BT.1886)
+    /// is the mastering-suite convention; some houses assume 2.2 for unlabeled
+    /// web-style masters (e.g. Simple DCP's guidelines).
+    public var sourceGamma: Double
     /// Additional videos for a multi-composition package. When empty, the
     /// single `source` passed to `export` is the only composition.
     public var elements: [DCPElement]
 
     public init(contentTitle: String, container: DCPContainer,
                 j2kBitsPerSecond: Int = 125_000_000, dcnc: DCNCOptions = DCNCOptions(),
+                sourceGamma: Double = 2.4,
                 elements: [DCPElement] = []) {
         self.contentTitle = contentTitle
         self.container = container
         self.j2kBitsPerSecond = j2kBitsPerSecond
         self.dcnc = dcnc
+        self.sourceGamma = sourceGamma
         self.elements = elements
     }
 }
@@ -216,6 +222,7 @@ public final class DCPExporter: Exporter {
             "Standard: SMPTE, unencrypted, 2K",
             "Container: \(settings.container.displayName)",
             "Compositions: \(results.count)",
+            String(format: "Color: Rec.709 (source gamma %.1f assumed) → 12-bit DCI X'Y'Z'", settings.sourceGamma),
             String(format: "JPEG 2000 bitrate cap: %.0f Mb/s", Double(settings.j2kBitsPerSecond) / 1_000_000),
             "Total size: \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))",
         ])
@@ -234,7 +241,7 @@ public final class DCPExporter: Exporter {
                 lines.append("Audio: 6-channel (L R C LFE Ls Rs), 24-bit, 48 kHz")
                 lines.append("Audio mapping: \(audioQC.mappingDescription)")
                 lines.append("Audio peak: \(QCReport.formatPeak(dbfs: audioQC.peakDBFS))")
-                lines.append("Loudness: \(LoudnessAdvice.describe(lufs: audioQC.loudnessLUFS))")
+                lines.append("Loudness: \(LoudnessAdvice.describe(lufs: audioQC.loudnessLUFS, context: .dcp))")
                 if !audioQC.mappingVerified {
                     lines.append("⚠️ Channel order was not verifiable — listen to a surround check before screening.")
                 }
@@ -266,7 +273,7 @@ public final class DCPExporter: Exporter {
                                            in: container)
         let encoder = J2KEncoder(width: container.width, height: container.height,
                                  bitsPerSecond: settings.j2kBitsPerSecond, frameRate: editRate.fps)
-        let transform = ColorTransform()
+        let transform = ColorTransform(sourceGamma: settings.sourceGamma)
 
         let asset = AVURLAsset(url: source.url)
         guard let track = asset.tracks(withMediaType: .video).first else {

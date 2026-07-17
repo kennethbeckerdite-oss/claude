@@ -36,6 +36,13 @@ struct DCPSettingsView: View {
                 }
             }
 
+            Picker("Source gamma", selection: $config.sourceGamma) {
+                Text("2.4 — standard for graded masters (default)").tag(2.4)
+                Text("2.2 — web-style/ungraded masters").tag(2.2)
+                Text("2.6 — cinema-graded masters").tag(2.6)
+            }
+            .help("How your film's brightness was mastered. If the DCP looks too dark or washed out next to your master, try the other setting.")
+
             Picker("Kind", selection: $config.dcnc.kind) {
                 ForEach(DCNCOptions.Kind.allCases, id: \.self) { kind in
                     Text(kind == .auto ? "Auto (by duration)" : kind.rawValue).tag(kind)

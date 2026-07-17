@@ -480,7 +480,7 @@ private final class MP4ExportSession: @unchecked Sendable {
             report.add("Audio", [
                 "AAC stereo \(settings.audioBitsPerSecond / 1000) kb/s",
                 "Peak: \(QCReport.formatPeak(dbfs: peak > 0 ? 20 * log10(Double(peak)) : nil))",
-                "Loudness\(loudnessLabel): \(LoudnessAdvice.describe(lufs: lufs))",
+                "Loudness\(loudnessLabel): \(LoudnessAdvice.describe(lufs: lufs, context: .screener))",
             ])
         }
 

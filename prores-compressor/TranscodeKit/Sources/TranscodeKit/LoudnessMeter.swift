@@ -164,18 +164,42 @@ struct Biquad {
 }
 
 /// Advisory interpretation of an integrated LUFS reading for the QC report.
+/// Thresholds follow common festival-mastering guidance (e.g. Simple DCP's
+/// recommended −25 to −29 LUFS integrated for festival films).
 public enum LoudnessAdvice {
-    public static func describe(lufs: Double?) -> String {
+    public enum Context {
+        /// Theatrical playback at reference level.
+        case dcp
+        /// Web upload / screener playback on laptops and TVs.
+        case screener
+    }
+
+    public static func describe(lufs: Double?, context: Context) -> String {
         guard let lufs else { return "not measured (silent or too short)" }
         let value = String(format: "%.1f LUFS integrated", lufs)
-        // Cinema mixes typically sit well below streaming's ~−14 LUFS target;
-        // a DCP near web levels will be uncomfortably loud in a theater.
-        if lufs > -16 {
-            return value + "  ⚠️ near web/streaming levels — likely too hot for a theater; have the mix checked"
+        switch context {
+        case .dcp:
+            switch lufs {
+            case (-29)...(-25):
+                return value + "  ✓ in the recommended range for festival DCPs (−25 to −29 LUFS)"
+            case (-25)...(-20):
+                return value + "  — somewhat louder than the −25 to −29 LUFS festival recommendation; consider a slightly quieter master"
+            case let hot where hot > -20:
+                return value + "  ⚠️ far above cinema levels (web mixes live here) — likely uncomfortably loud in a theater; have the mix checked"
+            case (-33)...(-29):
+                return value + "  (slightly below the −25 to −29 LUFS recommendation — safe, may play a touch quiet)"
+            default:
+                return value + "  — quiet; the film may play soft in the theater"
+            }
+        case .screener:
+            // Streaming platforms normalize around −14 LUFS.
+            if lufs > -9 {
+                return value + "  ⚠️ very hot for web playback — check for over-compression"
+            }
+            if lufs < -24 {
+                return value + "  (quiet for laptop/web playback; viewers will reach for the volume)"
+            }
+            return value
         }
-        if lufs > -20 {
-            return value + "  (louder than typical theatrical; fine for web/screener)"
-        }
-        return value
     }
 }

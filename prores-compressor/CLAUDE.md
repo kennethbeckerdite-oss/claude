@@ -58,9 +58,17 @@ Done in v2 workstream D (needs Kenneth's build verification):
 - [x] **Batch queue** — `AppState.QueueJob` (pre-built `any Exporter` + status); jobs run strictly sequentially via `runQueue()`. Configure pane gains "Add to Queue" and a one-click "Screener + DCP" (Festival Short MP4 + DCP from one master). `QueueView` lists status/progress with per-item Reveal/QC. Additive — the single-file wizard is unchanged.
 - [x] **DMG distribution** — `Scripts/make-dmg.sh`: xcodegen → xcodebuild Release → codesign (ad-hoc default; Developer ID + hardened runtime + `notarytool`/`stapler` when `DEVELOPER_ID`/`NOTARY_PROFILE` set) → `hdiutil` DMG with /Applications symlink. README "Distribution" section.
 
+Cross-checked against Simple DCP's submission guidelines (July 2026): source
+handling, frame-rate conforms, Flat/Scope letterboxing, 24-bit/48k audio, and
+DCNC naming all align. Their concrete loudness guidance (−25 to −29 LUFS
+integrated for festival films) is now the DCP QC advisory's reference range,
+and their gamma-2.2 assumption for unlabeled masters motivated the
+per-item Source gamma option (2.2/2.4/2.6, default 2.4/BT.1886).
+
 Deferred:
 - [ ] Software x264-quality option if hardware H.264 at 6 Mb/s underperforms the HandBrake original.
 - [ ] DCP timed-text subtitles (real XML/PNG subs, vs. the MP4 burn-in above), 4K DCP, encrypted (KDM) DCPs, HDR tone mapping.
+- [ ] Stereo-to-center routing option (dialogue speaker) for stereo sources; Leq(m) metering for trailers (TASA 85).
 - [ ] Real cinema-server ingest test before any actual screening.
 
 ## Build & Test

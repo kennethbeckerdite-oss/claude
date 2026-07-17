@@ -41,6 +41,9 @@ final class AppState {
         var container: DCPContainer = .flat
         var bitrateMbps: Double = 125
         var dcnc = DCNCOptions()
+        /// Assumed display gamma of the Rec.709 source (2.4 = mastering-suite
+        /// convention; 2.2 = some houses' assumption for web-style masters).
+        var sourceGamma: Double = 2.4
         /// Additional videos that become their own compositions in the package.
         var extraElements: [DCPElementItem] = []
     }
@@ -295,6 +298,7 @@ final class AppState {
             container: item.dcp.container,
             j2kBitsPerSecond: Int(item.dcp.bitrateMbps * 1_000_000),
             dcnc: item.dcp.dcnc,
+            sourceGamma: item.dcp.sourceGamma,
             elements: elements)
     }
 
