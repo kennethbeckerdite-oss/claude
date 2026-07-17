@@ -52,6 +52,11 @@ xcodegen generate          # requires: brew install xcodegen
 open ProResCompressor.xcodeproj
 ```
 
+Adding a NEW file under `ProResCompressor/` (app target) requires re-running
+`xcodegen generate` before it builds — the generated project snapshots the file
+list. `TranscodeKit/` (SPM) globs automatically. When a commit adds app-target
+files, say so in the reply so Kenneth knows to regenerate.
+
 Engine unit tests (pure-logic: bitrate math, framing, color vectors, DCP XML golden files):
 
 ```sh

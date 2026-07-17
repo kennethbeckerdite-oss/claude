@@ -20,6 +20,11 @@ open ProResCompressor.xcodeproj
 
 Build and run with ⌘R (scheme: ProResCompressor).
 
+> **After pulling changes that add new files under `ProResCompressor/`**, re-run
+> `xcodegen generate` — the generated project only lists files that existed at
+> generation time ("Cannot find X in scope" on a brand-new view is the tell).
+> `TranscodeKit/` files don't need this; Swift packages pick up files automatically.
+
 ## Distribution (DMG)
 
 `Scripts/make-dmg.sh` builds a Release app and packages it into a shareable DMG.
