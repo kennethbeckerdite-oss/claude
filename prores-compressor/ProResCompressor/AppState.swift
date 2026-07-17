@@ -51,11 +51,33 @@ final class AppState {
     var dcpExtraElements: [DCPElementItem] = []
     var isAddingDCPElement = false
 
+    // MARK: - Batch queue
+
+    struct QueueJob: Identifiable {
+        let id = UUID()
+        let sourceName: String
+        let summary: String
+        let exporter: any Exporter
+        let primarySource: ProbedSource
+        var status: Status = .pending
+        var progress: ExportProgress?
+        var result: ExportResult?
+
+        enum Status: Equatable {
+            case pending, running, done
+            case failed(String)
+        }
+    }
+
+    private(set) var queue: [QueueJob] = []
+    private(set) var isRunningQueue = false
+    private(set) var runningJobID: QueueJob.ID?
+
     private var exportTask: Task<Void, Never>?
     private var sleepActivity: NSObjectProtocol?
 
     func load(url: URL) {
-        guard !isExporting else { return }
+        guard !isExporting, !isRunningQueue else { return }
         phase = .probing
         // A fresh primary file starts fresh — drop extras and any prior SRT.
         dcpExtraElements = []
@@ -93,40 +115,56 @@ final class AppState {
         dcpExtraElements.removeAll { $0.id == id }
     }
 
-    func startExport() {
-        guard case .configuring(let source) = phase else { return }
-
-        let exporter: any Exporter
-        switch format {
-        case .mp4:
-            var settings: MP4Settings
-            switch mp4Mode {
-            case .targetSize:
-                settings = MP4Settings(
-                    rateControl: .targetSize(bytes: Int64(targetGigabytes * 1_000_000_000)),
-                    codec: mp4Codec)
-            case .smallHQ:
-                settings = .smallHQ
-            case .festivalShort:
-                settings = .festivalShort
-            }
-            settings.subtitleURL = mp4SubtitleURL
-            exporter = MP4Exporter(settings: settings)
-        case .dcp:
-            let primaryTitle = dcpContentTitle.isEmpty
-                ? source.url.deletingPathExtension().lastPathComponent : dcpContentTitle
-            // Multi-composition only when extras exist; otherwise the single
-            // source flows through the Exporter protocol as today.
-            let elements: [DCPElement] = dcpExtraElements.isEmpty ? [] :
-                [DCPElement(source: source, title: primaryTitle)]
-                + dcpExtraElements.map { DCPElement(source: $0.source, title: $0.title) }
-            exporter = DCPExporter(settings: DCPSettings(
-                contentTitle: primaryTitle,
-                container: dcpContainer,
-                j2kBitsPerSecond: Int(dcpBitrateMbps * 1_000_000),
-                dcnc: dcpDCNC,
-                elements: elements))
+    /// Builds an exporter + display summary from the current settings for the
+    /// configured source. Shared by immediate export and the batch queue.
+    private func makeMP4Exporter() -> (exporter: any Exporter, summary: String) {
+        var settings: MP4Settings
+        let modeLabel: String
+        switch mp4Mode {
+        case .targetSize:
+            settings = MP4Settings(
+                rateControl: .targetSize(bytes: Int64(targetGigabytes * 1_000_000_000)),
+                codec: mp4Codec)
+            modeLabel = "\(mp4Codec == .hevc ? "HEVC" : "H.264") · \(String(format: "%.1f", targetGigabytes)) GB"
+        case .smallHQ:
+            settings = .smallHQ
+            modeLabel = "Small & HQ"
+        case .festivalShort:
+            settings = .festivalShort
+            modeLabel = "Festival Short"
         }
+        settings.subtitleURL = mp4SubtitleURL
+        let subs = mp4SubtitleURL != nil ? " · burned subs" : ""
+        return (MP4Exporter(settings: settings), "MP4 · \(modeLabel)\(subs)")
+    }
+
+    private func makeDCPExporter(for source: ProbedSource) -> (exporter: any Exporter, summary: String) {
+        let primaryTitle = dcpContentTitle.isEmpty
+            ? source.url.deletingPathExtension().lastPathComponent : dcpContentTitle
+        let elements: [DCPElement] = dcpExtraElements.isEmpty ? [] :
+            [DCPElement(source: source, title: primaryTitle)]
+            + dcpExtraElements.map { DCPElement(source: $0.source, title: $0.title) }
+        let exporter = DCPExporter(settings: DCPSettings(
+            contentTitle: primaryTitle,
+            container: dcpContainer,
+            j2kBitsPerSecond: Int(dcpBitrateMbps * 1_000_000),
+            dcnc: dcpDCNC,
+            elements: elements))
+        let compositions = elements.isEmpty ? 1 : elements.count
+        let compLabel = compositions > 1 ? " · \(compositions) comps" : ""
+        return (exporter, "DCP · \(dcpContainer == .flat ? "Flat" : "Scope")\(compLabel)")
+    }
+
+    private func makeExporter(for source: ProbedSource) -> (exporter: any Exporter, summary: String) {
+        switch format {
+        case .mp4: return makeMP4Exporter()
+        case .dcp: return makeDCPExporter(for: source)
+        }
+    }
+
+    func startExport() {
+        guard case .configuring(let source) = phase, !isRunningQueue else { return }
+        let built = makeExporter(for: source)
 
         progress = nil
         phase = .exporting(source)
@@ -134,7 +172,7 @@ final class AppState {
 
         exportTask = Task {
             do {
-                let result = try await exporter.export(source: source) { progress in
+                let result = try await built.exporter.export(source: source) { progress in
                     Task { @MainActor [weak self] in
                         self?.progress = progress
                     }
@@ -154,12 +192,116 @@ final class AppState {
         }
     }
 
+    // MARK: - Queue actions
+
+    /// Adds the current configuration as a queued job, then returns to idle so
+    /// the next file can be dropped.
+    func addToQueue() {
+        guard case .configuring(let source) = phase else { return }
+        let built = makeExporter(for: source)
+        queue.append(QueueJob(sourceName: source.url.lastPathComponent,
+                              summary: built.summary,
+                              exporter: built.exporter,
+                              primarySource: source))
+        phase = .idle
+        progress = nil
+    }
+
+    /// Queues the festival pairing: a Festival Short MP4 screener plus a DCP,
+    /// both from the current master.
+    func addScreenerAndDCP() {
+        guard case .configuring(let source) = phase else { return }
+
+        var screener = MP4Settings.festivalShort
+        screener.subtitleURL = mp4SubtitleURL
+        queue.append(QueueJob(sourceName: source.url.lastPathComponent,
+                              summary: "MP4 · Festival Short (screener)",
+                              exporter: MP4Exporter(settings: screener),
+                              primarySource: source))
+
+        let dcp = makeDCPExporter(for: source)
+        queue.append(QueueJob(sourceName: source.url.lastPathComponent,
+                              summary: dcp.summary,
+                              exporter: dcp.exporter,
+                              primarySource: source))
+        phase = .idle
+        progress = nil
+    }
+
+    func removeQueueJob(id: QueueJob.ID) {
+        guard !isRunningQueue else { return }
+        queue.removeAll { $0.id == id && $0.status == .pending }
+    }
+
+    func clearFinishedJobs() {
+        guard !isRunningQueue else { return }
+        queue.removeAll { job in
+            if case .pending = job.status { return false }
+            if case .running = job.status { return false }
+            return true
+        }
+    }
+
+    /// Runs pending jobs strictly sequentially (exports are resource-hungry).
+    func runQueue() {
+        guard !isRunningQueue, !isExporting,
+              queue.contains(where: { $0.status == .pending }) else { return }
+        isRunningQueue = true
+        beginSleepPrevention()
+
+        exportTask = Task {
+            while let index = queue.firstIndex(where: { $0.status == .pending }) {
+                if Task.isCancelled { break }
+                let jobID = queue[index].id
+                queue[index].status = .running
+                queue[index].progress = nil
+                runningJobID = jobID
+
+                do {
+                    let job = queue[index]
+                    let result = try await job.exporter.export(source: job.primarySource) { progress in
+                        Task { @MainActor [weak self] in
+                            self?.updateJobProgress(id: jobID, progress: progress)
+                        }
+                    }
+                    if let i = queue.firstIndex(where: { $0.id == jobID }) {
+                        queue[i].status = .done
+                        queue[i].result = result
+                        queue[i].progress = nil
+                    }
+                } catch is CancellationError {
+                    setJobFailed(id: jobID, message: "Cancelled")
+                    break
+                } catch ExportError.cancelled {
+                    setJobFailed(id: jobID, message: "Cancelled")
+                    break
+                } catch {
+                    setJobFailed(id: jobID, message: error.localizedDescription)
+                }
+            }
+            runningJobID = nil
+            isRunningQueue = false
+            endSleepPrevention()
+        }
+    }
+
+    private func updateJobProgress(id: QueueJob.ID, progress: ExportProgress) {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        queue[index].progress = progress
+    }
+
+    private func setJobFailed(id: QueueJob.ID, message: String) {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        queue[index].status = .failed(message)
+        queue[index].progress = nil
+    }
+
     func cancelExport() {
         exportTask?.cancel()
     }
 
     func reset() {
-        guard !isExporting else { return }
+        guard !isExporting, !isRunningQueue else { return }
         phase = .idle
         progress = nil
     }

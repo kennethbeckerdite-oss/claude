@@ -34,9 +34,9 @@ Done in v2 workstream C (needs Kenneth's build verification):
 - [x] **Loudness metering** — `LoudnessMeter` (BS.1770-4 integrated LUFS, K-weighting + gating). DCP meters the delivered 6-channel program; MP4 meters the source. QC report gains an advisory Loudness line (warns when a DCP sits near web levels). Warn-only, never alters audio.
 - [x] **Burned-in subtitles from SRT** (MP4) — `SRTParser` + `SubtitleRenderer` (CoreText, white/black-outline, bottom-centered). When an .srt is chosen, MP4 export switches to an 8-bit BGRA draw-and-encode path via `AVAssetWriterInputPixelBufferAdaptor`; passthrough is untouched when there's no SRT. UI: "Burn subtitles…" row.
 
-Next (workstream D — throughput + distribution):
-- [ ] **Batch queue** (HandBrake-style): multiple files/settings run sequentially; the key one-click pairing is MP4 screener + DCP from the same master. Engine is already independent/cancellable units — mostly an `AppState`/UI reshape.
-- [ ] **DMG distribution**: `Scripts/make-dmg.sh` — build Release, codesign (ad-hoc default; Developer ID + `notarytool` + staple when `DEVELOPER_ID` set), `hdiutil` a shareable DMG. No app code changes — no sandbox or private APIs in use.
+Done in v2 workstream D (needs Kenneth's build verification):
+- [x] **Batch queue** — `AppState.QueueJob` (pre-built `any Exporter` + status); jobs run strictly sequentially via `runQueue()`. Configure pane gains "Add to Queue" and a one-click "Screener + DCP" (Festival Short MP4 + DCP from one master). `QueueView` lists status/progress with per-item Reveal/QC. Additive — the single-file wizard is unchanged.
+- [x] **DMG distribution** — `Scripts/make-dmg.sh`: xcodegen → xcodebuild Release → codesign (ad-hoc default; Developer ID + hardened runtime + `notarytool`/`stapler` when `DEVELOPER_ID`/`NOTARY_PROFILE` set) → `hdiutil` DMG with /Applications symlink. README "Distribution" section.
 
 Deferred:
 - [ ] Software x264-quality option if hardware H.264 at 6 Mb/s underperforms the HandBrake original.

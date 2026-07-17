@@ -20,6 +20,22 @@ open ProResCompressor.xcodeproj
 
 Build and run with ⌘R (scheme: ProResCompressor).
 
+## Distribution (DMG)
+
+`Scripts/make-dmg.sh` builds a Release app and packages it into a shareable DMG.
+
+- **Personal (default):** ad-hoc signed. Recipients right-click the app → **Open** the first time to clear Gatekeeper's "unidentified developer" prompt.
+  ```sh
+  ./Scripts/make-dmg.sh
+  ```
+- **Distribution (notarized):** requires a paid Apple Developer account. Sign with a Developer ID identity and notarize so it opens cleanly on any Mac:
+  ```sh
+  # one-time: xcrun notarytool store-credentials prc-notary --apple-id … --team-id … --password …
+  DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)" \
+    NOTARY_PROFILE=prc-notary ./Scripts/make-dmg.sh
+  ```
+  With `DEVELOPER_ID` set the app is signed with the hardened runtime; adding `NOTARY_PROFILE` notarizes and staples the DMG. The app uses no sandbox entitlements or private APIs, so nothing else needs to change to distribute it.
+
 ## Engine tests
 
 All engine logic lives in the `TranscodeKit` local Swift package (no UI):

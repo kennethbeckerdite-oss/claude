@@ -7,20 +7,31 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            switch appState.phase {
-            case .idle:
-                DropZoneView()
-            case .probing:
-                ProgressView("Reading file…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .configuring(let source):
-                ConfigureView(source: source)
-            case .exporting(let source):
-                ExportProgressView(source: source)
-            case .done(let source, let result):
-                DoneView(source: source, result: result)
-            case .failed(let source, let message):
-                FailedView(hasSource: source != nil, message: message)
+            if appState.isRunningQueue {
+                QueueView()
+            } else {
+                switch appState.phase {
+                case .idle:
+                    if appState.queue.isEmpty {
+                        DropZoneView()
+                    } else {
+                        VStack(spacing: 16) {
+                            DropZoneView()
+                            QueueView()
+                        }
+                    }
+                case .probing:
+                    ProgressView("Reading file…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .configuring(let source):
+                    ConfigureView(source: source)
+                case .exporting(let source):
+                    ExportProgressView(source: source)
+                case .done(let source, let result):
+                    DoneView(source: source, result: result)
+                case .failed(let source, let message):
+                    FailedView(hasSource: source != nil, message: message)
+                }
             }
         }
         .padding(24)
@@ -28,8 +39,9 @@ struct ContentView: View {
     }
 
     private var phaseKey: String {
+        if appState.isRunningQueue { return "queue" }
         switch appState.phase {
-        case .idle: return "idle"
+        case .idle: return appState.queue.isEmpty ? "idle" : "idle-queue"
         case .probing: return "probing"
         case .configuring: return "configuring"
         case .exporting: return "exporting"
@@ -68,11 +80,21 @@ struct ConfigureView: View {
             HStack {
                 Button("Choose Another File") { appState.reset() }
                 Spacer()
+                Button("Add to Queue") { appState.addToQueue() }
+                    .disabled(!exportAllowed)
+                Button("Screener + DCP") { appState.addScreenerAndDCP() }
+                    .disabled(!dcpAllowed)
+                    .help("Queue a Festival Short MP4 screener and a DCP from this master")
                 Button("Export") { appState.startExport() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!exportAllowed)
             }
         }
+    }
+
+    private var dcpAllowed: Bool {
+        let allSources = [source] + appState.dcpExtraElements.map(\.source)
+        return allSources.allSatisfy { EditRate.isSupported(frameRate: $0.frameRate) }
     }
 
     private var exportAllowed: Bool {
@@ -82,8 +104,7 @@ struct ConfigureView: View {
         case .dcp:
             // DCP supports 24/25/30 (incl. 23.976/29.97). Every composition
             // in the package must qualify.
-            let allSources = [source] + appState.dcpExtraElements.map(\.source)
-            return allSources.allSatisfy { EditRate.isSupported(frameRate: $0.frameRate) }
+            return dcpAllowed
         }
     }
 }
