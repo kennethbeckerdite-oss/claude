@@ -18,8 +18,11 @@ try:
     import pillow_heif
 except ImportError:
     sys.exit(
-        "Missing libraries. Install them with:\n"
-        "    python3 -m pip install pillow pillow-heif"
+        "Missing image libraries.\n\n"
+        "Run the setup script next to this file:\n"
+        "    ./setup.sh\n\n"
+        "Then use the ./heif2jpeg wrapper instead of calling this file directly,\n"
+        "so it picks up the libraries setup.sh installed."
     )
 
 pillow_heif.register_heif_opener()

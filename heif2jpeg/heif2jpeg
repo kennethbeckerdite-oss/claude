@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Runs the converter using this folder's private Python environment,
+# setting it up automatically the first time.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="$DIR/.venv"
+
+if [ ! -x "$VENV/bin/python" ]; then
+    echo "First run — setting things up."
+    "$DIR/setup.sh"
+    echo
+fi
+
+exec "$VENV/bin/python" "$DIR/heif2jpeg.py" "$@"

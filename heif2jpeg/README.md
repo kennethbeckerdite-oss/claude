@@ -8,44 +8,58 @@ Handles `.heif`, `.heic`, `.hif`, and `.avif`.
 **Your original photos are never changed, moved, or deleted.** The program only
 writes new `.jpg` files.
 
-## One-time setup
+## Setup
 
-You need Python 3 (on a Mac, `python3` is usually already there; on Windows,
-install it from [python.org](https://www.python.org/downloads/) and tick
-"Add Python to PATH").
+You need Python 3. On a Mac it's usually already installed; on Windows, get it
+from [python.org](https://www.python.org/downloads/) and tick "Add Python to
+PATH" during install.
 
-Then open Terminal (Mac) or Command Prompt (Windows) and run:
+There is no separate install step. The first time you run the converter it
+builds its own private Python environment inside this folder (`.venv/`) and
+installs what it needs there.
 
-```
-python3 -m pip install pillow pillow-heif
-```
-
-That's it. You only do this once.
+**This never touches your system Python or Homebrew.** If you tried
+`pip install` directly and got `error: externally-managed-environment`, that's
+Homebrew's Python blocking system-wide installs on purpose — the private
+environment is exactly the workaround it's asking for.
 
 ## Using it
+
+Open Terminal and `cd` into this folder first:
+
+```
+cd /path/to/heif2jpeg
+```
 
 Convert one photo — the JPEG lands next to the original:
 
 ```
-python3 heif2jpeg.py IMG_4021.HEIC
+./heif2jpeg IMG_4021.HEIC
 ```
 
 Convert a whole folder of photos:
 
 ```
-python3 heif2jpeg.py ~/Pictures/iPhone
+./heif2jpeg ~/Pictures/iPhone
 ```
 
 Convert a folder *and* everything inside its sub-folders, putting all the JPEGs
 somewhere separate:
 
 ```
-python3 heif2jpeg.py ~/Pictures/iPhone -r -o ~/Pictures/converted
+./heif2jpeg ~/Pictures/iPhone -r -o ~/Pictures/converted
 ```
 
-**Tip:** you don't have to type file paths. Type `python3 heif2jpeg.py ` (with a
-space at the end), then drag the file or folder from Finder/Explorer onto the
-terminal window — it fills in the path for you. Press Enter.
+The very first run prints a minute of setup chatter before it starts
+converting. Every run after that goes straight to work.
+
+**Tip:** you don't have to type file paths. Type `./heif2jpeg ` (with a space at
+the end), then drag the folder from Finder onto the Terminal window — it fills
+in the path for you. Press Enter.
+
+**On Windows** there's no `./heif2jpeg` wrapper. Do the setup once with
+`python -m venv .venv` then `.venv\Scripts\pip install -r requirements.txt`,
+and run it with `.venv\Scripts\python heif2jpeg.py <your folder>`.
 
 ## Options
 
@@ -84,4 +98,7 @@ Done. 47 converted, 2 skipped, 1 failed.
   with `--overwrite` if you want it replaced.
 - **"failed"** — that file couldn't be read (corrupt, or not really a HEIF file
   despite its name). The rest still converted.
-- **"Missing libraries"** — the setup step above hasn't been run yet.
+- **"Missing image libraries"** — you ran `heif2jpeg.py` directly instead of
+  the `./heif2jpeg` wrapper. Use the wrapper, or run `./setup.sh` first.
+- **`error: externally-managed-environment`** — you ran `pip install` by hand.
+  You don't need to; just run `./heif2jpeg`, which handles it.
